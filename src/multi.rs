@@ -26,6 +26,10 @@ impl<T: Debug> StreamBatch<T> {
         self.items.is_empty()
     }
 
+    fn len(&self) -> usize {
+        self.items.len()
+    }
+
     fn push(&mut self, item: T) {
         self.items.push_back(item)
     }
@@ -40,7 +44,7 @@ struct MultistreamBatch<K: Ord, T: Debug> {
     // All known batches by stream key
     batches: HashMap<K, StreamBatch<T>>,
     // Stream key of batches that have received at least one message and are not complete yet
-    live: VecDeque<(Instant, K)>,
+    outstanding: VecDeque<(Instant, K)>,
     // Complete batch that we are now streaming
     complete: Option<(K, StreamBatch<T>)>,
 }
@@ -48,6 +52,7 @@ struct MultistreamBatch<K: Ord, T: Debug> {
 impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, T: Debug {
     pub fn new(max_size: usize, max_duration: Duration) -> (Sender<(K, T)>, MultistreamBatch<K, T>) {
         let (sender, receiver) = crossbeam_channel::bounded(max_size * 2);
+        assert!(max_size > 0, "MultistreamBatch::new max_size == 0");
 
         (sender, MultistreamBatch {
             channel: receiver,
@@ -55,7 +60,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
             max_duration,
             disconnected: false,
             batches: Default::default(),
-            live: Default::default(),
+            outstanding: Default::default(),
             complete: None,
         })
     }
@@ -71,42 +76,52 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
     }
 
     fn move_complete(&mut self, key: K) {
-        let batch = self.batches.remove(&key).expect("live key but batch missing");
+        let batch = self.batches.remove(&key).expect("outstanding key but batch missing");
         self.complete = Some((key, batch));
     }
 
-    pub fn next(&mut self) -> Result<Option<T>, EndOfStreamError> {
-
+    /// Get next item from completed batch of any stream.
+    ///
+    /// Returns `Ok(Some((K, T)))` where `K` is key of the current batch being streamed and `T` is the
+    /// next item of the batch.
+    ///
+    /// Returns `Ok(None)` signaling end of batch if:
+    /// * `max_size` of the batch was reached,
+    /// * `max_duration` since first element returned elapsed.
+    ///
+    /// This call will block indefinitely waiting for first item if no batches are outstanding.
+    ///
+    /// If sending end has been dropped/colsed `Err(EndOfStreamError)` will be returned after flushing all
+    /// outstading batches starting from oldest.
+    pub fn next(&mut self) -> Result<Option<(K, T)>, EndOfStreamError> {
         loop {
-            // check if complete is some and stream it untill done
+            // Check if complete is some and stream it untill done
             if let Some((key, mut batch)) = self.complete.take() {
                 let item = batch.next();
-                if item.is_some() {
-                    self.complete = Some((key, batch));
-                    return Ok(item);
+                if let Some(item) = item {
+                    self.complete = Some((key.clone(), batch));
+                    return Ok(Some((key, item)));
                 }
-                // put it back to batches when done and return None
+                // Put it back to batches when done and return None
                 self.batches.insert(key, batch);
                 return Ok(None);
             }
 
-            // if disconnected
-            //  * take first batch from batches as compelte
-            //  * if no more batches left return EndOfStreamError
+            // Channel is disconnected
             if self.disconnected {
-                // flusth live batches starting from oldest
-                if let Some((_start, key)) = self.live.pop_front() {
+                // Flusth outstanding batches starting from oldest
+                if let Some((_start, key)) = self.outstanding.pop_front() {
                     self.move_complete(key);
                     continue;
                 }
-                // free memory
+                // If no more batches left free memory and return EndOfStreamError
                 self.batches.clear();
                 return Err(EndOfStreamError);
             }
 
 
-            // if we have live batches recv_with_timeout based on oldest batch interval - max_duration
-            let kitem = if let Some((batch_start, key)) = self.live.pop_front() {
+            // If we have outstanding batches recv_with_timeout based on oldest batch interval - max_duration
+            let kitem = if let Some((batch_start, key)) = self.outstanding.pop_front() {
                 let since_start = Instant::now().duration_since(batch_start);
 
                 // Reached max_duration limit
@@ -117,8 +132,8 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
 
                 match self.channel.recv_timeout(self.max_duration - since_start) {
                     Ok(kitem) => {
-                        // reschedule
-                        self.live.push_front((batch_start, key));
+                        // Reschedule as oldest
+                        self.outstanding.push_front((batch_start, key));
                         Some(kitem)
                     },
                     // Reached max_duration limit
@@ -130,7 +145,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
                     Err(RecvTimeoutError::Disconnected) => None,
                 }
             } else {
-                // if we have no live batches blocking recv() from channel
+                // If we have no outstanding batches blocking recv() from channel
                 match self.channel.recv() {
                     Ok(kitem) => Some(kitem),
                     // Other end gone
@@ -138,18 +153,24 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
                 }
             };
 
-            // on message look up batch by key and add to batch
+            // On message look up batch by key and add to batch
             if let Some((key, item)) = kitem {
                 let batch = self.batches.entry(key.clone()).or_insert_with(|| StreamBatch::new());
 
-                // if batch had no message before insert it to live with now instant
+                // If batch had no message before insert it to outstanding with now instant
                 if batch.is_empty() {
-                    self.live.push_back((Instant::now(), key));
+                    self.outstanding.push_back((Instant::now(), key.clone()));
                 }
 
                 batch.push(item);
+
+                // Reached max_size limit
+                if batch.len() >= self.max_size {
+                    self.move_complete(key);
+                    continue;
+                }
             } else {
-                // if we got channel closed mark disconnet
+                // If we got channel closed mark disconnet
                 self.disconnected = true;
                 continue;
             }

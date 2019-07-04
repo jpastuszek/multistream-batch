@@ -45,9 +45,11 @@ impl<T: Debug> TxBatch<T> {
 
     /// Get next item from the batch.
     ///
+    /// Returns `Some(T)` with next item of the batch.
+    ///
     /// Returns `None` signaling end of batch if:
-    /// * `max_size` of the batch has been reached,
-    /// * `max_duration` since first element returned has elapsed.
+    /// * `max_size` of the batch was reached,
+    /// * `max_duration` since first element returned elapsed.
     ///
     /// This call will block indefinitely waiting for first item of the batch.
     ///
