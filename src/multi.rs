@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::hash::Hash;
+use std::collections::vec_deque::Drain;
 
 #[derive(Debug)]
 struct StreamBatch<T: Debug> {
@@ -18,10 +19,6 @@ impl<T: Debug> StreamBatch<T> {
         }
     }
 
-    fn next(&mut self) -> Option<T> {
-        self.items.pop_front()
-    }
-
     fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -32,6 +29,10 @@ impl<T: Debug> StreamBatch<T> {
 
     fn push(&mut self, item: T) {
         self.items.push_back(item)
+    }
+
+    fn drain(&mut self) -> Drain<T> {
+        self.items.drain(0..)
     }
 }
 
@@ -45,8 +46,6 @@ struct MultistreamBatch<K: Ord, T: Debug> {
     batches: HashMap<K, StreamBatch<T>>,
     // Stream key of batches that have received at least one message and are not complete yet
     outstanding: VecDeque<(Instant, K)>,
-    // Complete batch that we are now streaming
-    complete: Option<(K, StreamBatch<T>)>,
 }
 
 impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, T: Debug {
@@ -61,7 +60,6 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
             disconnected: false,
             batches: Default::default(),
             outstanding: Default::default(),
-            complete: None,
         })
     }
 
@@ -75,9 +73,9 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
         batch
     }
 
-    fn move_complete(&mut self, key: K) {
-        let batch = self.batches.remove(&key).expect("outstanding key but batch missing");
-        self.complete = Some((key, batch));
+    fn drain_batch(&mut self, key: K) -> (K, Drain<T>) {
+        let drain = self.batches.get_mut(&key).expect("outstanding key but batch missing").drain();
+        (key, drain)
     }
 
     /// Get next item from completed batch of any stream.
@@ -93,26 +91,13 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
     ///
     /// If sending end has been dropped/colsed `Err(EndOfStreamError)` will be returned after flushing all
     /// outstading batches starting from oldest.
-    pub fn next(&mut self) -> Result<Option<(K, T)>, EndOfStreamError> {
+    pub fn next(&mut self) -> Result<(K, Drain<T>), EndOfStreamError> {
         loop {
-            // Check if complete is some and stream it untill done
-            if let Some((key, mut batch)) = self.complete.take() {
-                let item = batch.next();
-                if let Some(item) = item {
-                    self.complete = Some((key.clone(), batch));
-                    return Ok(Some((key, item)));
-                }
-                // Put it back to batches when done and return None
-                self.batches.insert(key, batch);
-                return Ok(None);
-            }
-
             // Channel is disconnected
             if self.disconnected {
                 // Flusth outstanding batches starting from oldest
                 if let Some((_start, key)) = self.outstanding.pop_front() {
-                    self.move_complete(key);
-                    continue;
+                    return Ok(self.drain_batch(key))
                 }
                 // If no more batches left free memory and return EndOfStreamError
                 self.batches.clear();
@@ -126,8 +111,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
 
                 // Reached max_duration limit
                 if since_start > self.max_duration {
-                    self.move_complete(key);
-                    continue;
+                    return Ok(self.drain_batch(key))
                 }
 
                 match self.channel.recv_timeout(self.max_duration - since_start) {
@@ -138,8 +122,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
                     },
                     // Reached max_duration limit
                     Err(RecvTimeoutError::Timeout) => {
-                        self.move_complete(key);
-                        continue;
+                        return Ok(self.drain_batch(key))
                     }
                     // Other end gone
                     Err(RecvTimeoutError::Disconnected) => None,
@@ -166,8 +149,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
 
                 // Reached max_size limit
                 if batch.len() >= self.max_size {
-                    self.move_complete(key);
-                    continue;
+                    return Ok(self.drain_batch(key))
                 }
             } else {
                 // If we got channel closed mark disconnet

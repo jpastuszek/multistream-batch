@@ -7,6 +7,9 @@ use crate::EndOfStreamError;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
+// TODO: impl TxIterator that represents batch; when dropped batch is commited, has retry()
+// function to start iteration from begginging of the batch
+
 #[derive(Debug)]
 pub struct TxBatch<T: Debug> {
     channel: Receiver<T>,
