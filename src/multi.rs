@@ -49,8 +49,8 @@ struct MultistreamBatch<K: Ord, T: Debug> {
 }
 
 impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, T: Debug {
-    pub fn new(max_size: usize, max_duration: Duration) -> (Sender<(K, T)>, MultistreamBatch<K, T>) {
-        let (sender, receiver) = crossbeam_channel::bounded(max_size * 2);
+    pub fn new(max_size: usize, max_duration: Duration, channel_capacity: usize) -> (Sender<(K, T)>, MultistreamBatch<K, T>) {
+        let (sender, receiver) = crossbeam_channel::bounded(channel_capacity);
         assert!(max_size > 0, "MultistreamBatch::new max_size == 0");
 
         (sender, MultistreamBatch {
@@ -63,8 +63,8 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
         })
     }
 
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, producer: impl Fn(Sender<(K, T)>) -> () + Send + 'static) -> MultistreamBatch<K, T> where K: Ord, T: Send + 'static {
-        let (sender, batch) = MultistreamBatch::new(max_size, max_duration);
+    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_capacity: usize, producer: impl Fn(Sender<(K, T)>) -> () + Send + 'static) -> MultistreamBatch<K, T> where K: Ord, T: Send + 'static {
+        let (sender, batch) = MultistreamBatch::new(max_size, max_duration, channel_capacity);
 
         std::thread::spawn(move || {
             producer(sender)
@@ -78,16 +78,16 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
         (key, drain)
     }
 
-    /// Get next item from completed batch of any stream.
+    /// Get next batch of items from any stream.
     ///
-    /// Returns `Ok(Some((K, T)))` where `K` is key of the current batch being streamed and `T` is the
-    /// next item of the batch.
+    /// Returns `Ok((K, Drain<T>))` where `K` is key of the current batch being streamed and `T`
+    /// are the items in the batch.
     ///
-    /// Returns `Ok(None)` signaling end of batch if:
+    /// Drain will provide items from batch that:
     /// * `max_size` of the batch was reached,
     /// * `max_duration` since first element returned elapsed.
     ///
-    /// This call will block indefinitely waiting for first item if no batches are outstanding.
+    /// This call will block indefinitely waiting for items to produce a batch.
     ///
     /// If sending end has been dropped/colsed `Err(EndOfStreamError)` will be returned after flushing all
     /// outstading batches starting from oldest.
@@ -157,5 +157,54 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
                 continue;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    pub use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_batch_streams() {
+        let (sender, mut mbatch) = MultistreamBatch::new(4, Duration::from_secs(10), 20);
+
+        sender.send((0, 1)).unwrap();
+        sender.send((0, 2)).unwrap();
+        sender.send((0, 3)).unwrap();
+        sender.send((0, 4)).unwrap();
+        sender.send((0, 5)).unwrap();
+
+        let (key, batch) = mbatch.next().unwrap();
+        assert_eq!(key, 0);
+        let batch = batch.collect::<Vec<_>>();
+        assert_eq!(batch.as_slice(), [1, 2, 3, 4]);
+
+        sender.send((1, 1)).unwrap();
+        sender.send((0, 6)).unwrap();
+        sender.send((1, 2)).unwrap();
+        sender.send((0, 7)).unwrap();
+        sender.send((1, 3)).unwrap();
+        sender.send((1, 4)).unwrap();
+        sender.send((0, 8)).unwrap();
+        sender.send((1, 5)).unwrap();
+        sender.send((1, 6)).unwrap();
+        sender.send((1, 7)).unwrap();
+        sender.send((1, 8)).unwrap();
+
+        let (key, batch) = mbatch.next().unwrap();
+        assert_eq!(key, 1);
+        let batch = batch.collect::<Vec<_>>();
+        assert_eq!(batch.as_slice(), [1, 2, 3, 4]);
+
+        let (key, batch) = mbatch.next().unwrap();
+        assert_eq!(key, 0);
+        let batch = batch.collect::<Vec<_>>();
+        assert_eq!(batch.as_slice(), [5, 6, 7, 8]);
+
+        let (key, batch) = mbatch.next().unwrap();
+        assert_eq!(key, 1);
+        let batch = batch.collect::<Vec<_>>();
+        assert_eq!(batch.as_slice(), [5, 6, 7, 8]);
     }
 }
