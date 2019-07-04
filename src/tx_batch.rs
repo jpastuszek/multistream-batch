@@ -1,23 +1,11 @@
-//! `TxBatch` allows for batching incoming stream of events base on batch maximum size or maximum
-//! duration since first event received. It also buffers the events so that current batch can be
+//! `TxBatch` allows for batching incoming stream of items based on batch maximum size or maximum
+//! duration since first item received. It also buffers the items so that current batch can be
 //! processed again for example in case of downstream transaction failure.
 use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
+use crate::EndOfStreamError;
 
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
-use std::error::Error;
-use std::fmt;
-
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct EndOfStreamError;
-
-impl fmt::Display for EndOfStreamError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "no more entries will be provided to this batch")
-    }
-}
-
-impl Error for EndOfStreamError {}
 
 #[derive(Debug)]
 pub struct TxBatch<T: Debug> {
@@ -71,9 +59,9 @@ impl<T: Debug> TxBatch<T> {
     pub fn next(&mut self) -> Option<&T> {
         // Yield internal messages
         if self.cursor < self.items.len() {
-            let e = &self.items[self.cursor];
+            let item = &self.items[self.cursor];
             self.cursor += 1;
-            return Some(e)
+            return Some(item)
         }
 
         // Reached max_size limit
@@ -84,10 +72,10 @@ impl<T: Debug> TxBatch<T> {
         let recv = match self.batch_start {
             // Wait indefinitely for first item that will start the batch
             None => match self.channel.recv() {
-                Ok(e) => {
+                Ok(item) => {
                     // Got first item - record batch start time
                     self.batch_start.get_or_insert_with(|| Instant::now());
-                    Ok(e)
+                    Ok(item)
                 },
                 Err(_) => Err(EndOfStreamError),
             }
@@ -101,7 +89,7 @@ impl<T: Debug> TxBatch<T> {
                 }
 
                 match self.channel.recv_timeout(self.max_duration - since_start) {
-                    Ok(e) => Ok(e),
+                    Ok(item) => Ok(item),
                     // Reached max_duration limit
                     Err(RecvTimeoutError::Timeout) => return None,
                     // Other end gone
@@ -111,8 +99,8 @@ impl<T: Debug> TxBatch<T> {
         };
 
         match recv {
-            Ok(e) => {
-                self.items.push(e);
+            Ok(item) => {
+                self.items.push(item);
                 self.cursor += 1;
                 return Some(self.items.last().unwrap())
             }
