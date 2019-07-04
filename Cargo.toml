@@ -6,3 +6,7 @@ edition = "2018"
 
 [dependencies]
 crossbeam-channel = "0.3.8"
+linked-hash-map = "0.5.2"
+
+[dev-dependencies]
+assert_matches = "1.3.0"

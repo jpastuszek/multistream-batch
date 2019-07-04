@@ -1,162 +1,160 @@
-use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
-use crate::EndOfStreamError;
-
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use linked_hash_map::LinkedHashMap;
 use std::hash::Hash;
-use std::collections::vec_deque::Drain;
+use std::vec::Drain;
 
 #[derive(Debug)]
 struct StreamBatch<T: Debug> {
-    items: VecDeque<T>,
+    items: Vec<T>,
+    created: Instant,
 }
 
 impl<T: Debug> StreamBatch<T> {
-    fn new() -> StreamBatch<T> {
+    fn new(capacity: usize) -> StreamBatch<T> {
         StreamBatch {
-            items: VecDeque::new(),
+            items: Vec::with_capacity(capacity),
+            created: Instant::now(),
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    fn push(&mut self, item: T) {
-        self.items.push_back(item)
-    }
-
-    fn drain(&mut self) -> Drain<T> {
-        self.items.drain(0..)
+    fn from_cache(mut items: Vec<T>) -> StreamBatch<T> {
+        items.clear();
+        StreamBatch {
+            items,
+            created: Instant::now(),
+        }
     }
 }
 
-// Should I use Rc<RefCell<StreamBatch>>> instead of K + lookup?
-struct MultistreamBatch<K: Ord, T: Debug> {
-    channel: Receiver<(K, T)>,
-    disconnected: bool,
+#[derive(Debug)]
+pub enum BatchResult<'a, K: Debug, T: Debug> {
+    /// Batch is complete due to reaching one of the limits `Ready` variant contains key and
+    /// `Drain` iterator for batch items.
+    Ready(K, Drain<'a, T>),
+    /// No batch is ready; optional `Duration` until first `max_duration` limit will be reached
+    /// if there are outstanding batches.
+    NotReady(Option<Duration>),
+}
+
+impl<'a, K: Debug, T: Debug> From<(K, Drain<'a, T>)> for BatchResult<'a, K, T> {
+    fn from(kv: (K, Drain<'a, T>)) -> BatchResult<'a, K, T> {
+        BatchResult::Ready(kv.0, kv.1)
+    }
+}
+
+/// Crates batches based on key that are provided when they reach given limit.
+/// Batches are cached to avoid allocations.
+#[derive(Debug)]
+pub struct MultistreamBatch<K: Debug + Ord + Hash, T: Debug> {
     max_size: usize,
     max_duration: Duration,
-    // All known batches by stream key
-    batches: HashMap<K, StreamBatch<T>>,
-    // Stream key of batches that have received at least one message and are not complete yet
-    outstanding: VecDeque<(Instant, K)>,
+    // Cache of empty batches
+    cache: Vec<Vec<T>>,
+    // Batches that have items in them but has not yet reached any limit in order of insertion
+    outstanding: LinkedHashMap<K, StreamBatch<T>>,
 }
 
-impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, T: Debug {
-    pub fn new(max_size: usize, max_duration: Duration, channel_capacity: usize) -> (Sender<(K, T)>, MultistreamBatch<K, T>) {
-        let (sender, receiver) = crossbeam_channel::bounded(channel_capacity);
-        assert!(max_size > 0, "MultistreamBatch::new max_size == 0");
+impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Send + Clone + 'static, T: Debug {
+    pub fn new(max_size: usize, max_duration: Duration) -> MultistreamBatch<K, T> {
+        assert!(max_size > 1, "MultistreamBatch::new max_size needst to be more than 1");
 
-        (sender, MultistreamBatch {
-            channel: receiver,
+        MultistreamBatch {
             max_size,
             max_duration,
-            disconnected: false,
-            batches: Default::default(),
+            cache: Default::default(),
             outstanding: Default::default(),
-        })
+        }
     }
 
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_capacity: usize, producer: impl Fn(Sender<(K, T)>) -> () + Send + 'static) -> MultistreamBatch<K, T> where K: Ord, T: Send + 'static {
-        let (sender, batch) = MultistreamBatch::new(max_size, max_duration, channel_capacity);
-
-        std::thread::spawn(move || {
-            producer(sender)
-        });
-
-        batch
-    }
-
+    /// Drain batch and move it to cache.
     fn drain_batch(&mut self, key: K) -> (K, Drain<T>) {
-        let drain = self.batches.get_mut(&key).expect("outstanding key but batch missing").drain();
+        // Move items from outstanding to cache
+        let items = self.outstanding.remove(&key).expect("bad drain key").items;
+        self.cache.push(items);
+        let items = self.cache.last_mut().unwrap();
+
+        // Drain items
+        let drain = items.drain(0..);
         (key, drain)
     }
 
-    /// Get next batch of items from any stream.
+    /// Flush all outstanding batches starting from oldest.
+    pub fn flush(&mut self) -> Vec<(K, Vec<T>)> {
+        let cache = &mut self.cache;
+        let outstanding = &mut self.outstanding;
+
+        outstanding.entries().map(|entry| {
+            let key = entry.key().clone();
+
+            // Move to cache
+            let items = entry.remove().items;
+            cache.push(items);
+            let items = cache.last_mut().unwrap();
+
+            // Move items out preserving capacity
+            let items = items.split_off(0);
+
+            (key, items)
+        }).collect()
+    }
+
+    /// Removes cached batch buffers.
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    /// Insert next item into a batch with given stream key.
     ///
-    /// Returns `Ok((K, Drain<T>))` where `K` is key of the current batch being streamed and `T`
+    /// Returns `BatchResult::Ready(K, Drain<T>)` where `K` is key of ready batch and `T`
     /// are the items in the batch.
     ///
     /// Drain will provide items from batch that:
     /// * `max_size` of the batch was reached,
     /// * `max_duration` since first element returned elapsed.
     ///
-    /// This call will block indefinitely waiting for items to produce a batch.
-    ///
-    /// If sending end has been dropped/colsed `Err(EndOfStreamError)` will be returned after flushing all
-    /// outstading batches starting from oldest.
-    pub fn next(&mut self) -> Result<(K, Drain<T>), EndOfStreamError> {
-        loop {
-            // Channel is disconnected
-            if self.disconnected {
-                // Flusth outstanding batches starting from oldest
-                if let Some((_start, key)) = self.outstanding.pop_front() {
-                    return Ok(self.drain_batch(key))
-                }
-                // If no more batches left free memory and return EndOfStreamError
-                self.batches.clear();
-                return Err(EndOfStreamError);
-            }
-
-
-            // If we have outstanding batches recv_with_timeout based on oldest batch interval - max_duration
-            let kitem = if let Some((batch_start, key)) = self.outstanding.pop_front() {
-                let since_start = Instant::now().duration_since(batch_start);
-
-                // Reached max_duration limit
-                if since_start > self.max_duration {
-                    return Ok(self.drain_batch(key))
-                }
-
-                match self.channel.recv_timeout(self.max_duration - since_start) {
-                    Ok(kitem) => {
-                        // Reschedule as oldest
-                        self.outstanding.push_front((batch_start, key));
-                        Some(kitem)
-                    },
-                    // Reached max_duration limit
-                    Err(RecvTimeoutError::Timeout) => {
-                        return Ok(self.drain_batch(key))
-                    }
-                    // Other end gone
-                    Err(RecvTimeoutError::Disconnected) => None,
-                }
+    /// Returns `BatchResult::NotReady(Option<Duration>)` when no batch has reached a limit with
+    /// optional `Duration` of time until oldest batch reaches `max_duration` limit.
+    pub fn insert(&mut self, item: Option<(K, T)>) -> BatchResult<K, T> {
+        if let Some((key, item)) = item {
+            // First look up in outstanding or move one from cache/create new batch
+            let len = if let Some(batch) = self.outstanding.get_mut(&key) {
+                batch.items.push(item);
+                batch.items.len()
             } else {
-                // If we have no outstanding batches blocking recv() from channel
-                match self.channel.recv() {
-                    Ok(kitem) => Some(kitem),
-                    // Other end gone
-                    Err(_) => None,
-                }
+                // Get from cache or allocate new
+                let mut batch = if let Some(items) = self.cache.pop() {
+                    StreamBatch::from_cache(items)
+                } else {
+                    StreamBatch::new(self.max_size)
+                };
+
+                // Push item and store in outstanding
+                batch.items.push(item);
+                self.outstanding.insert(key.clone(), batch);
+                1
             };
 
-            // On message look up batch by key and add to batch
-            if let Some((key, item)) = kitem {
-                let batch = self.batches.entry(key.clone()).or_insert_with(|| StreamBatch::new());
-
-                // If batch had no message before insert it to outstanding with now instant
-                if batch.is_empty() {
-                    self.outstanding.push_back((Instant::now(), key.clone()));
-                }
-
-                batch.push(item);
-
-                // Reached max_size limit
-                if batch.len() >= self.max_size {
-                    return Ok(self.drain_batch(key))
-                }
-            } else {
-                // If we got channel closed mark disconnet
-                self.disconnected = true;
-                continue;
+            // Reached max_size limit
+            if len >= self.max_size {
+                return self.drain_batch(key).into()
             }
         }
+
+        // Check oldest outstanding batch
+        if let Some((key, batch)) = self.outstanding.back() {
+            let since_start = Instant::now().duration_since(batch.created);
+            let key = key.clone();
+
+            // Reached max_duration limit
+            if since_start > self.max_duration {
+                return self.drain_batch(key).into()
+            }
+
+            return BatchResult::NotReady(Some(self.max_duration - since_start))
+        }
+
+        return BatchResult::NotReady(None)
     }
 }
 
@@ -164,47 +162,80 @@ impl<K, T> MultistreamBatch<K, T> where K: Ord + Hash + Send + Clone + 'static, 
 mod tests {
     pub use super::*;
     use std::time::Duration;
+    use assert_matches::assert_matches;
+
+    #[test]
+    fn test_batch_not_ready_no_duration() {
+        let mut mbatch = MultistreamBatch::new(4, Duration::from_secs(10));
+
+        // empty has no outstanding batches
+        assert_matches!(mbatch.insert(None), BatchResult::NotReady(None));
+
+        assert_matches!(mbatch.insert(Some((0, 1))), BatchResult::NotReady(Some(_duration)));
+
+        // now we have outstanding
+        assert_matches!(mbatch.insert(None), BatchResult::NotReady(Some(_duration)));
+
+        assert_matches!(mbatch.insert(Some((0, 2))), BatchResult::NotReady(Some(_duration)));
+        assert_matches!(mbatch.insert(Some((0, 3))), BatchResult::NotReady(Some(_duration)));
+        assert_matches!(mbatch.insert(Some((0, 4))), BatchResult::Ready(0, drain) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        );
+
+        // no outstanding again
+        assert_matches!(mbatch.insert(None), BatchResult::NotReady(None));
+    }
 
     #[test]
     fn test_batch_streams() {
-        let (sender, mut mbatch) = MultistreamBatch::new(4, Duration::from_secs(10), 20);
+        let mut mbatch = MultistreamBatch::new(4, Duration::from_secs(10));
 
-        sender.send((0, 1)).unwrap();
-        sender.send((0, 2)).unwrap();
-        sender.send((0, 3)).unwrap();
-        sender.send((0, 4)).unwrap();
-        sender.send((0, 5)).unwrap();
+        assert_matches!(mbatch.insert(None), BatchResult::NotReady(None));
 
-        let (key, batch) = mbatch.next().unwrap();
-        assert_eq!(key, 0);
-        let batch = batch.collect::<Vec<_>>();
-        assert_eq!(batch.as_slice(), [1, 2, 3, 4]);
+        assert_matches!(mbatch.insert(Some((0, 1))), BatchResult::NotReady(Some(_duration)));
+        assert_matches!(mbatch.insert(Some((0, 2))), BatchResult::NotReady(Some(_duration)));
+        assert_matches!(mbatch.insert(Some((0, 3))), BatchResult::NotReady(Some(_duration)));
 
-        sender.send((1, 1)).unwrap();
-        sender.send((0, 6)).unwrap();
-        sender.send((1, 2)).unwrap();
-        sender.send((0, 7)).unwrap();
-        sender.send((1, 3)).unwrap();
-        sender.send((1, 4)).unwrap();
-        sender.send((0, 8)).unwrap();
-        sender.send((1, 5)).unwrap();
-        sender.send((1, 6)).unwrap();
-        sender.send((1, 7)).unwrap();
-        sender.send((1, 8)).unwrap();
+        assert_matches!(mbatch.insert(Some((0, 4))), BatchResult::Ready(0, drain) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        );
 
-        let (key, batch) = mbatch.next().unwrap();
-        assert_eq!(key, 1);
-        let batch = batch.collect::<Vec<_>>();
-        assert_eq!(batch.as_slice(), [1, 2, 3, 4]);
+        assert_matches!(mbatch.insert(Some((0, 1))), BatchResult::NotReady(Some(_duration)));
+        //sender.send((0, 2)).unwrap();
+        //sender.send((0, 3)).unwrap();
+        //sender.send((0, 4)).unwrap();
+        //sender.send((0, 5)).unwrap();
 
-        let (key, batch) = mbatch.next().unwrap();
-        assert_eq!(key, 0);
-        let batch = batch.collect::<Vec<_>>();
-        assert_eq!(batch.as_slice(), [5, 6, 7, 8]);
+        //let (key, batch) = mbatch.next().unwrap();
+        //assert_eq!(key, 0);
+        //let batch = batch.collect::<Vec<_>>();
+        //assert_eq!(batch.as_slice(), [1, 2, 3, 4]);
 
-        let (key, batch) = mbatch.next().unwrap();
-        assert_eq!(key, 1);
-        let batch = batch.collect::<Vec<_>>();
-        assert_eq!(batch.as_slice(), [5, 6, 7, 8]);
+        //sender.send((1, 1)).unwrap();
+        //sender.send((0, 6)).unwrap();
+        //sender.send((1, 2)).unwrap();
+        //sender.send((0, 7)).unwrap();
+        //sender.send((1, 3)).unwrap();
+        //sender.send((1, 4)).unwrap();
+        //sender.send((0, 8)).unwrap();
+        //sender.send((1, 5)).unwrap();
+        //sender.send((1, 6)).unwrap();
+        //sender.send((1, 7)).unwrap();
+        //sender.send((1, 8)).unwrap();
+
+        //let (key, batch) = mbatch.next().unwrap();
+        //assert_eq!(key, 1);
+        //let batch = batch.collect::<Vec<_>>();
+        //assert_eq!(batch.as_slice(), [1, 2, 3, 4]);
+
+        //let (key, batch) = mbatch.next().unwrap();
+        //assert_eq!(key, 0);
+        //let batch = batch.collect::<Vec<_>>();
+        //assert_eq!(batch.as_slice(), [5, 6, 7, 8]);
+
+        //let (key, batch) = mbatch.next().unwrap();
+        //assert_eq!(key, 1);
+        //let batch = batch.collect::<Vec<_>>();
+        //assert_eq!(batch.as_slice(), [5, 6, 7, 8]);
     }
 }
