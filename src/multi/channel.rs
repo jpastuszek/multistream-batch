@@ -73,7 +73,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
                 match self.mbatch.poll() {
                     PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
                     PollResult::NotReady(instant) => {
-                        // Update instant here as batch could have been already returned by insert
+                        // Update instant here as batch could have been already returned by append
                         self.next_batch_at = instant;
                         return Ok(None)
                     }
@@ -92,7 +92,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
         };
 
         match recv_result {
-            Ok((key, item)) => match self.mbatch.insert(key, item) {
+            Ok((key, item)) => match self.mbatch.append(key, item) {
                 PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
                 PollResult::NotReady(instant) => {
                     self.next_batch_at = instant;
@@ -149,7 +149,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
             };
 
             match item {
-                Ok((key, item)) => match self.mbatch.insert(key, item) {
+                Ok((key, item)) => match self.mbatch.append(key, item) {
                     PollResult::Ready(key, drain) => return Ok((key, drain)),
                     PollResult::NotReady(_) => continue,
                 },
