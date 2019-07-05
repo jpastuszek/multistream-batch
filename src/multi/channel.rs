@@ -48,69 +48,69 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
     /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all outstanding batches
     /// were flushed.
     pub fn next<'i>(&'i mut self) -> Result<Option<(K, Drain<'i, T>)>, EndOfStreamError> {
+        if self.flush.is_some() {
+            // Note that I can't use if let above or we move mut borrow here
+            let batches = self.flush.as_mut().unwrap();
+
+            if self.flush_index >= batches.len() {
+                // We are done flushing, free memory and bail
+                batches.clear();
+                return Err(EndOfStreamError);
+            }
+
+            let (key, items) = &mut batches[self.flush_index];
+            self.flush_index += 1;
+            return Ok(Some((key.clone(), items.drain(0..))))
+        }
+
         let now = Instant::now();
 
         // Check if batch is ready due to duration limit
-        let poll_ready = self.next_batch_at.as_ref().map(|instant| *instant > now).unwrap_or(false);
+        let poll_ready = self.next_batch_at.map(|instant| instant > now).unwrap_or(false);
 
         if poll_ready {
             // We should have ready batch but if not update next_batch_at and go again
             match self.mbatch.poll() {
                 PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
                 PollResult::NotReady(instant) => {
-                    // Update instant here as batch could have been returned by insert
+                    // Update instant here as batch could have been already returned by insert
                     self.next_batch_at = instant;
                     return Ok(None)
                 }
             }
+        }
+
+        let item = if let Some(instant) = self.next_batch_at {
+            match self.channel.recv_timeout(now.duration_since(instant)) {
+                Ok(item) => Ok(item),
+                // A batch should be ready, go again
+                Err(RecvTimeoutError::Timeout) => return Ok(None),
+                // Other end gone
+                Err(RecvTimeoutError::Disconnected) => Err(EndOfStreamError),
+            }
         } else {
-            let item = if let Some(instant) = self.next_batch_at.as_ref() {
-                match self.channel.recv_timeout(now.duration_since(*instant)) {
-                    Ok(item) => Ok(item),
-                    // A batch should be ready, go again
-                    Err(RecvTimeoutError::Timeout) => return Ok(None),
-                    // Other end gone
-                    Err(RecvTimeoutError::Disconnected) => Err(EndOfStreamError),
+            // No outstanding batches so wait for first item
+            self.channel.recv().map_err(|_| EndOfStreamError)
+        };
+
+        match item {
+            Ok((key, item)) => match self.mbatch.insert(key, item) {
+                PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
+                PollResult::NotReady(instant) => {
+                    self.next_batch_at = instant;
+                    return Ok(None)
                 }
-            } else {
-                // No outstanding batches so wait for first item
-                self.channel.recv().map_err(|_| EndOfStreamError)
-            };
+            },
+            Err(_eos) => {
+                // Flush batches and free memory
+                let batches = self.mbatch.flush();
+                self.mbatch.clear_cache();
+                self.flush = Some(batches);
 
-            match item {
-                Ok((key, item)) => match self.mbatch.insert(key, item) {
-                    PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
-                    PollResult::NotReady(instant) => {
-                        self.next_batch_at = instant;
-                        return Ok(None)
-                    }
-                },
-                Err(_eos) => {
-                    if self.flush.is_some() {
-                        // Note that I can't use if let above
-                        let batches = self.flush.as_mut().unwrap();
+                // There won't be next batch
+                self.next_batch_at.take();
 
-                        if self.flush_index >= batches.len() {
-                            // We are done flushing, free memory and bail
-                            batches.clear();
-                            return Err(EndOfStreamError);
-                        }
-
-                        let (key, items) = &mut batches[self.flush_index];
-                        self.flush_index += 1;
-                        return Ok(Some((key.clone(), items.drain(0..))))
-                    } else {
-                        // Flush batches and free memory
-                        let batches = self.mbatch.flush();
-                        self.mbatch.clear_cache();
-                        self.flush = Some(batches);
-
-                        // There won't be next batch
-                        self.next_batch_at.take();
-
-                        return Ok(None)
-                    }
-                }
+                return Ok(None)
             }
         }
     }
