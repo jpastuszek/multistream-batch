@@ -66,34 +66,32 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
         let now = Instant::now();
 
         // Check if batch is ready due to duration limit
-        let poll_ready = self.next_batch_at.map(|instant| instant > now).unwrap_or(false);
-
-        if poll_ready {
-            // We should have ready batch but if not update next_batch_at and go again
-            match self.mbatch.poll() {
-                PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
-                PollResult::NotReady(instant) => {
-                    // Update instant here as batch could have been already returned by insert
-                    self.next_batch_at = instant;
-                    return Ok(None)
+        let recv_result = match self.next_batch_at.map(|instant| if instant > now { None } else { Some(instant) }) {
+            // Batch ready to go
+            Some(None) => {
+                // We should have ready batch but if not update next_batch_at and go again
+                match self.mbatch.poll() {
+                    PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
+                    PollResult::NotReady(instant) => {
+                        // Update instant here as batch could have been already returned by insert
+                        self.next_batch_at = instant;
+                        return Ok(None)
+                    }
                 }
             }
-        }
-
-        let item = if let Some(instant) = self.next_batch_at {
-            match self.channel.recv_timeout(now.duration_since(instant)) {
+            // Wait for next batch or item
+            Some(Some(instant)) => match self.channel.recv_timeout(now.duration_since(instant)) {
                 Ok(item) => Ok(item),
-                // A batch should be ready, go again
+                // A batch should be ready now; go again
                 Err(RecvTimeoutError::Timeout) => return Ok(None),
                 // Other end gone
                 Err(RecvTimeoutError::Disconnected) => Err(EndOfStreamError),
-            }
-        } else {
+            },
             // No outstanding batches so wait for first item
-            self.channel.recv().map_err(|_| EndOfStreamError)
+            None => self.channel.recv().map_err(|_| EndOfStreamError),
         };
 
-        match item {
+        match recv_result {
             Ok((key, item)) => match self.mbatch.insert(key, item) {
                 PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
                 PollResult::NotReady(instant) => {
