@@ -120,8 +120,9 @@ impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Clone, T: Debug 
             let since_start = Instant::now().duration_since(batch.created);
             let key = key.clone();
 
-            // Reached max_duration limit
-            if since_start > self.max_duration {
+            // Reached max_duration limit; need to == so that returned instance represents moment
+            // in time at which batch is ready
+            if since_start >= self.max_duration {
                 return self.drain_stream(key).unwrap().into()
             }
 

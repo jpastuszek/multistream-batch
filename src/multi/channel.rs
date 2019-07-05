@@ -66,7 +66,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
         let now = Instant::now();
 
         // Check if batch is ready due to duration limit
-        let recv_result = match self.next_batch_at.map(|instant| if instant > now { None } else { Some(instant) }) {
+        let recv_result = match self.next_batch_at.map(|instant| if instant >= now { None } else { Some(instant) }) {
             // Batch ready to go
             Some(None) => {
                 // We should have ready batch but if not update next_batch_at and go again
