@@ -18,8 +18,8 @@ pub struct MultistreamBatchChannel<K: Debug + Ord + Hash, T: Debug> {
 }
 
 impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Clone + 'static, T: Debug + Send + 'static {
-    pub fn new(max_size: usize, max_duration: Duration) -> (Sender<(K, T)>, MultistreamBatchChannel<K, T>) {
-        let (sender, receiver) = crossbeam_channel::bounded(max_size * 2);
+    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<(K, T)>, MultistreamBatchChannel<K, T>) {
+        let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
         (sender, MultistreamBatchChannel {
             channel: receiver,
@@ -30,8 +30,8 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
         })
     }
 
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, producer: impl Fn(Sender<(K, T)>) -> () + Send + 'static) -> MultistreamBatchChannel<K, T> {
-        let (sender, batch) = MultistreamBatchChannel::new(max_size, max_duration);
+    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl Fn(Sender<(K, T)>) -> () + Send + 'static) -> MultistreamBatchChannel<K, T> {
+        let (sender, batch) = MultistreamBatchChannel::new(max_size, max_duration, channel_size);
 
         std::thread::spawn(move || {
             producer(sender)
@@ -66,7 +66,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
         let now = Instant::now();
 
         // Check if batch is ready due to duration limit
-        let recv_result = match self.next_batch_at.map(|instant| if instant >= now { None } else { Some(instant) }) {
+        let recv_result = match self.next_batch_at.map(|instant| if instant <= now { None } else { Some(instant) }) {
             // Batch ready to go
             Some(None) => {
                 // We should have ready batch but if not update next_batch_at and go again
@@ -80,7 +80,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
                 }
             }
             // Wait for next batch or item
-            Some(Some(instant)) => match self.channel.recv_timeout(now.duration_since(instant)) {
+            Some(Some(instant)) => match self.channel.recv_timeout(instant.duration_since(now)) {
                 Ok(item) => Ok(item),
                 // A batch should be ready now; go again
                 Err(RecvTimeoutError::Timeout) => return Ok(None),
@@ -163,4 +163,146 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
         }
     }
     */
+}
+
+#[cfg(test)]
+mod tests {
+    pub use super::*;
+    use std::time::Duration;
+    use assert_matches::assert_matches;
+
+    #[test]
+    fn test_batch_max_size() {
+        let (sender, mut mbatch) = MultistreamBatchChannel::new(4, Duration::from_secs(10), 20);
+
+        sender.send((0, 1)).unwrap();
+        sender.send((0, 2)).unwrap();
+        sender.send((0, 3)).unwrap();
+        sender.send((0, 4)).unwrap();
+        sender.send((0, 5)).unwrap();
+
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+
+        assert_matches!(mbatch.next(), Ok(Some((0, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        );
+
+        sender.send((1, 1)).unwrap();
+        sender.send((1, 2)).unwrap();
+        sender.send((1, 3)).unwrap();
+        sender.send((1, 4)).unwrap();
+        sender.send((1, 5)).unwrap();
+
+        assert_matches!(mbatch.next(), Ok(None)); // 0, 5
+
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+
+        assert_matches!(mbatch.next(), Ok(Some((1, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        );
+
+        sender.send((1, 6)).unwrap();
+        sender.send((0, 6)).unwrap();
+        sender.send((1, 7)).unwrap();
+        sender.send((0, 7)).unwrap();
+        sender.send((1, 8)).unwrap();
+        sender.send((0, 8)).unwrap();
+
+        assert_matches!(mbatch.next(), Ok(None)); // 1, 5
+
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+
+        assert_matches!(mbatch.next(), Ok(Some((1, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
+        );
+
+        assert_matches!(mbatch.next(), Ok(Some((0, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
+        );
+    }
+
+    #[test]
+    fn test_batch_with_producer_thread() {
+        let mut mbatch = MultistreamBatchChannel::with_producer_thread(2, Duration::from_secs(10), 20, |sender| {
+            sender.send((0, 1)).unwrap();
+            sender.send((1, 1)).unwrap();
+            sender.send((0, 2)).unwrap();
+            sender.send((1, 2)).unwrap();
+        });
+
+
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+
+        assert_matches!(mbatch.next(), Ok(Some((0, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
+        );
+
+        assert_matches!(mbatch.next(), Ok(Some((1, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
+        );
+    }
+
+    #[test]
+    fn test_batch_max_duration() {
+        let mut mbatch = MultistreamBatchChannel::with_producer_thread(2, Duration::from_millis(100) ,10, |sender| {
+            sender.send((0, 1)).unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+        });
+
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None)); // timeout
+
+        assert_matches!(mbatch.next(), Ok(Some((0, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        );
+    }
+
+    #[test]
+    fn test_batch_disconnected() {
+        let (sender, mut mbatch) = MultistreamBatchChannel::new(2, Duration::from_secs(10), 20);
+
+        sender.send((0, 1)).unwrap();
+        sender.send((1, 1)).unwrap();
+        sender.send((0, 2)).unwrap();
+        sender.send((1, 2)).unwrap();
+        sender.send((0, 3)).unwrap();
+        sender.send((1, 3)).unwrap();
+
+        drop(sender);
+
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+
+        assert_matches!(mbatch.next(), Ok(Some((0, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
+        );
+
+        assert_matches!(mbatch.next(), Ok(Some((1, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
+        );
+
+        assert_matches!(mbatch.next(), Ok(None));
+        assert_matches!(mbatch.next(), Ok(None));
+
+        assert_matches!(mbatch.next(), Ok(None)); // EndOfStreamError will flush
+
+        assert_matches!(mbatch.next(), Ok(Some((0, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3])
+        );
+
+        assert_matches!(mbatch.next(), Ok(Some((1, drain))) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3])
+        );
+
+        assert_matches!(mbatch.next(), Err(EndOfStreamError));
+    }
+
 }
