@@ -132,7 +132,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Clone, T: Debug 
         return PollResult::NotReady(None)
     }
 
-    /// Insert next item into a batch with given stream key.
+    /// Append next item to a batch with given stream key.
     ///
     /// Returns `PollResult::Ready(K, Drain<T>)` where `K` is key of ready batch and `T`
     /// are the items in the batch.
