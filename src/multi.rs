@@ -53,7 +53,7 @@ impl<'a, K: Debug, T: Debug> From<(K, Drain<'a, T>)> for BatchResult<'a, K, T> {
 pub struct MultistreamBatch<K: Debug + Ord + Hash, T: Debug> {
     max_size: usize,
     max_instant: Duration,
-    // Cache of empty batches
+    // Cache of empty batch item buffers
     cache: Vec<Vec<T>>,
     // Batches that have items in them but has not yet reached any limit in order of insertion
     outstanding: LinkedHashMap<K, StreamBatch<T>>,
