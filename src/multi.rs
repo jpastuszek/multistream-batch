@@ -50,7 +50,7 @@ impl<'a, K: Debug, I: Debug> From<(K, Drain<'a, I>)> for PollResult<'a, K, I> {
     }
 }
 
-/// Collect items into batches based on stream key. This base implementation does not handle actual waiting on batch duration timeouts.
+/// Collect items into multiple batches based on stream key. This base implementation does not handle actual waiting on batch duration timeouts.
 /// 
 /// When given batch limits are reached iterator draining the batch items is provided.
 /// Batch given by stream key can also be manually flushed.

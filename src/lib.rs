@@ -6,6 +6,8 @@ pub use multi::*;
 use std::error::Error;
 use std::fmt;
 
+/// Error returned by channel based implementations when `Sender` end of 
+/// channel was dropped and no more outstanding data is left to be provided. 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct EndOfStreamError;
 
