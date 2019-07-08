@@ -2,11 +2,34 @@ use std::time::{Duration, Instant};
 use std::fmt::Debug;
 use std::vec::Drain;
 
+mod channel;
+pub use channel::*;
+
 /// Represents result from `poll` and `append` functions where batch is `Ready` to be consumed or `NotReady` yet.
 #[derive(Debug)]
 pub enum PollResult {
     Ready,
     NotReady(Option<Instant>),
+}
+
+#[derive(Debug)]
+pub struct BatchDrain<'b, I: Debug>(&'b mut BufBatch<I>);
+
+impl<'b, I: Debug> BatchDrain<'b, I> {
+    /// Return items as new `Vec` and start new batch
+    pub fn split_off(&mut self) -> Vec<I> {
+        self.0.split_off()
+    }
+
+    /// Drain items from internal buffer and start new batch
+    pub fn drain(&mut self) -> Drain<I> {
+        self.0.drain()
+    }
+
+    /// Return slice from intranl item buffer
+    pub fn as_slice(&self) -> &[I] {
+        self.0.as_slice()
+    }
 }
 
 /// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
@@ -40,7 +63,7 @@ impl<I: Debug> BufBatch<I> {
     }
 
     /// Clear items and start new batch
-    pub fn reset(&mut self) {
+    pub fn clear(&mut self) {
         self.first_item = None;
         self.items.clear();
     }
@@ -55,6 +78,12 @@ impl<I: Debug> BufBatch<I> {
     pub fn drain(&mut self) -> Drain<I> {
         self.first_item = None;
         self.items.drain(0..)
+    }
+
+    /// Swap items buffer with given `Vec` and clear
+    pub fn swap(&mut self, items: &mut Vec<I>) {
+        std::mem::swap(&mut self.items, items);
+        self.clear();
     }
 
     /// Convert into intrnal item buffer
@@ -87,6 +116,8 @@ impl<I: Debug> BufBatch<I> {
 
     /// Appends item to batch and returns reference to item just inserted and PollResult indicating if any limit has been reached.
     pub fn append(&mut self, item: I) -> (&I, PollResult) {
+        assert!(self.items.len() < self.max_size, "BufBatch append: append after batch ready but unconsumed");
+
         self.items.push(item);
         
         if self.items.len() >= self.max_size {

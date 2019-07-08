@@ -173,7 +173,7 @@ impl<I: Debug> TxBatch<I> {
     /// 
     /// Returns `Err(EndOfStreamError)` if channel was closed and there won't be any more items.
     pub fn commit(&mut self) -> Result<(), EndOfStreamError> {
-        self.batch.reset();
+        self.batch.clear();
         self.retry_uncommitted = None;
         self.complete = false;
         self.ready_at = None;
