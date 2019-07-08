@@ -16,17 +16,31 @@ pub enum Command<K: Debug + Ord + Hash, I: Debug> {
     Drain(K),
 }
 
+/// Collect items into multiple batches based on stream key.
+/// This implementation uses `crossbeam` channel to implement timeouts on batch duration limit.
+/// 
+/// Batches have maximum size and maximum duration (since first item received) limits set and when reached that batch will be flushed.
+/// Batches can also be manually flushed by sending `Command::Drain(K)` message.
+/// 
 #[derive(Debug)]
 pub struct MultistreamBatchChannel<K: Debug + Ord + Hash, I: Debug> {
     channel: Receiver<Command<K, I>>,
     mbatch: MultistreamBatch<K, I>,
+    // When flushing outstanding batches this buffer will contain all the data
     flush: Option<Vec<(K, Vec<I>)>>,
     flush_index: usize,
-    // Instant at after which we can poll batch
+    // Instant at which a batch would reach its duration limit
     next_batch_at: Option<Instant>,
 }
 
 impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone + 'static, I: Debug + Send + 'static {
+    /// Create new instance of `MultistreamBatchChannel` given maximum size of any single batch in number of items (`max_size`)
+    /// and maximum duration a batch can last (`max_duration`). 
+    /// 
+    /// Internally bounded `crossbeam` channel is used with `channel_size` capacity.
+    /// 
+    /// Returns `Sender<Command<K, I>>` side of channel which can be used to send items and flush buffers via `Command` enum 
+    /// and `MultistreamBatchChannel` receiver end which can be used to receive flushed batches.
     pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<K, I>>, MultistreamBatchChannel<K, I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
@@ -39,6 +53,10 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
         })
     }
 
+    /// Create `MultistreamBatchChannel` with sender end embedded in newly spawned thread.
+    /// 
+    /// `producer` closure will be called in context of newly spawned thread with `Sender<Command<K, I>>` endpoint provided as first argument.
+    /// Returns `MultistreamBatchChannel` connected with the sender.
     pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl Fn(Sender<Command<K, I>>) -> () + Send + 'static) -> MultistreamBatchChannel<K, I> {
         let (sender, batch) = MultistreamBatchChannel::new(max_size, max_duration, channel_size);
 
@@ -63,14 +81,13 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
 
     /// Get next batch as pair of key and drain iterator for items.
     ///
-    /// Call may block until item is received or batch duration limit was reached.
+    /// This call may block until item is received or batch duration limit was reached.
+    /// It may also return `Ok(None)` if no batch was ready at this time without blocking. In this case client should call `next()` again.
     ///
-    /// Retruns `Ok(None)` if no batch was ready at this call, call again.
-    /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all outstanding batches
-    /// were flushed.
+    /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all outstanding batches were flushed.
     pub fn next<'i>(&'i mut self) -> Result<Option<(K, Drain<'i, I>)>, EndOfStreamError> {
         if self.flush.is_some() {
-            // Note that I can't use if let above or we move mut borrow here
+            // Note that I can't use `if let` above or we move mut borrow here
             let batches = self.flush.as_mut().unwrap();
 
             if self.flush_index >= batches.len() {
@@ -79,6 +96,7 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
                 return Err(EndOfStreamError);
             }
 
+            // Provide next batch from flushed batches
             let (key, items) = &mut batches[self.flush_index];
             self.flush_index += 1;
             return Ok(Some((key.clone(), items.drain(0..))))
@@ -86,7 +104,7 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
 
         let now = Instant::now();
 
-        // Check if batch is ready due to duration limit
+        // Check if batch is ready due to duration limit if we know next instant
         let recv_result = match self.next_batch_at.map(|instant| if instant <= now { None } else { Some(instant) }) {
             // Batch ready to go
             Some(None) => {
@@ -102,19 +120,22 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
             }
             // Wait for next batch or item
             Some(Some(instant)) => match self.channel.recv_timeout(instant.duration_since(now)) {
+                // We got new item before timeout was reached
                 Ok(item) => Ok(item),
                 // A batch should be ready now; go again
                 Err(RecvTimeoutError::Timeout) => return Ok(None),
                 // Other end gone
                 Err(RecvTimeoutError::Disconnected) => Err(EndOfStreamError),
             },
-            // No outstanding batches so wait for first item
+            // No outstanding batches; wait for first item
             None => self.channel.recv().map_err(|_| EndOfStreamError),
         };
 
         match recv_result {
             Ok(Command::Append(key, item)) => match self.mbatch.append(key, item) {
+                // Batch is now full
                 PollResult::Ready(key, drain) => return Ok(Some((key, drain))),
+                // Batch not yet full; note instant at witch oldest batch will reach its duration limit
                 PollResult::NotReady(instant) => {
                     self.next_batch_at = instant;
                     return Ok(None)

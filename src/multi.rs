@@ -7,6 +7,7 @@ use std::vec::Drain;
 mod channel;
 pub use channel::*;
 
+/// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
 #[derive(Debug)]
 struct StreamBatch<I: Debug> {
     items: Vec<I>,
@@ -32,6 +33,7 @@ impl<I: Debug> StreamBatch<I> {
     }
 }
 
+/// Represents result from `poll` and `append` functions where batch is `Ready` to be consumed or `NotReady` yet.
 #[derive(Debug)]
 pub enum PollResult<'a, K: Debug, I: Debug> {
     /// Batch is complete after reaching one of the limits; stream key and
@@ -48,10 +50,12 @@ impl<'a, K: Debug, I: Debug> From<(K, Drain<'a, I>)> for PollResult<'a, K, I> {
     }
 }
 
-/// Collects items into batches based on stream key.
+/// Collect items into batches based on stream key. This base implementation does not handle actual waiting on batch duration timeouts.
+/// 
 /// When given batch limits are reached iterator draining the batch items is provided.
+/// Batch given by stream key can also be manually flushed.
 ///
-/// Batche buffers are cached to avoid allocations.
+/// Batch buffers are cached to avoid allocations.
 #[derive(Debug)]
 pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
     max_size: usize,
@@ -63,6 +67,9 @@ pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
 }
 
 impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
+    /// Crate new `MultistreamBatch` with given maximum size (`max_size`) of batch and maximum duration (`max_duration`) since batch was crated (first item appended) limits.
+    /// 
+    /// Panics if `max_size` <= 1.
     pub fn new(max_size: usize, max_duration: Duration) -> MultistreamBatch<K, I> {
         // Note that with max_size == 1 the insert function may never get to poll max_duration
         // expired batches
@@ -113,7 +120,7 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         self.cache.clear();
     }
 
-    /// Pool for outstanding batches that reached duration limit.
+    /// Poll for outstanding batches that reached duration limit.
     fn poll(&mut self) -> PollResult<K, I> {
         // Check oldest outstanding batch
         if let Some((key, batch)) = self.outstanding.front() {
@@ -132,31 +139,29 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         return PollResult::NotReady(None)
     }
 
-    /// Append next item to a batch with given stream key.
+    /// Append next item to batch with given stream key.
     ///
     /// Returns `PollResult::Ready(K, Drain<I>)` where `K` is key of ready batch and `I`
     /// are the items in the batch.
     ///
     /// Batch will be ready to drain if:
     /// * `max_size` of the batch was reached,
-    /// * `max_duration` since first element returned elapsed.
+    /// * `max_duration` since first element appended elapsed.
     ///
     /// Returns `PollResult::NotReady(Option<Duration>)` when no batch has reached a limit with
-    /// optional `Duration` of time until oldest batch reaches `max_duration` limit.
+    /// optional `Instance` of time at which oldest batch reaches `max_duration` limit.
     pub fn append(&mut self, key: K, item: I) -> PollResult<K, I> {
-        // First look up in outstanding or move one from cache/create new batch
+        // Look up batch in outstanding or crate one using cached or new items buffer
         let len = if let Some(batch) = self.outstanding.get_mut(&key) {
             batch.items.push(item);
             batch.items.len()
         } else {
-            // Get from cache or allocate new
             let mut batch = if let Some(items) = self.cache.pop() {
                 StreamBatch::from_cache(items)
             } else {
                 StreamBatch::new(self.max_size)
             };
 
-            // Push item and store in outstanding
             batch.items.push(item);
             self.outstanding.insert(key.clone(), batch);
             1
@@ -167,6 +172,8 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
             return self.drain_stream(key).unwrap().into()
         }
 
+        // Batch did not reach its max_size limit
+        // We need to check if any batch has reached its duration limit or provide `Instant` at which it will so client can set up timeout accordingly
         self.poll()
     }
 }
