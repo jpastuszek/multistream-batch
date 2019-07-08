@@ -1,3 +1,5 @@
+mod buf_batch;
+pub use buf_batch::*;
 mod tx_batch;
 pub use tx_batch::*;
 mod multi;
