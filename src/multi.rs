@@ -8,20 +8,20 @@ mod channel;
 pub use channel::*;
 
 #[derive(Debug)]
-struct StreamBatch<T: Debug> {
-    items: Vec<T>,
+struct StreamBatch<I: Debug> {
+    items: Vec<I>,
     created: Instant,
 }
 
-impl<T: Debug> StreamBatch<T> {
-    fn new(capacity: usize) -> StreamBatch<T> {
+impl<I: Debug> StreamBatch<I> {
+    fn new(capacity: usize) -> StreamBatch<I> {
         StreamBatch {
             items: Vec::with_capacity(capacity),
             created: Instant::now(),
         }
     }
 
-    fn from_cache(mut items: Vec<T>) -> StreamBatch<T> {
+    fn from_cache(mut items: Vec<I>) -> StreamBatch<I> {
         // Make sure nothing is left after undrained
         items.clear();
 
@@ -33,17 +33,17 @@ impl<T: Debug> StreamBatch<T> {
 }
 
 #[derive(Debug)]
-pub enum PollResult<'a, K: Debug, T: Debug> {
+pub enum PollResult<'a, K: Debug, I: Debug> {
     /// Batch is complete after reaching one of the limits; stream key and
     /// `Drain` iterator for the batch items are provided.
-    Ready(K, Drain<'a, T>),
+    Ready(K, Drain<'a, I>),
     /// No outstanding batch reached a limit; provides optional `Instant` until first `max_duration` limit will be reached
     /// if there is an outstanding stream batch.
     NotReady(Option<Instant>),
 }
 
-impl<'a, K: Debug, T: Debug> From<(K, Drain<'a, T>)> for PollResult<'a, K, T> {
-    fn from(kv: (K, Drain<'a, T>)) -> PollResult<'a, K, T> {
+impl<'a, K: Debug, I: Debug> From<(K, Drain<'a, I>)> for PollResult<'a, K, I> {
+    fn from(kv: (K, Drain<'a, I>)) -> PollResult<'a, K, I> {
         PollResult::Ready(kv.0, kv.1)
     }
 }
@@ -53,17 +53,17 @@ impl<'a, K: Debug, T: Debug> From<(K, Drain<'a, T>)> for PollResult<'a, K, T> {
 ///
 /// Batche buffers are cached to avoid allocations.
 #[derive(Debug)]
-pub struct MultistreamBatch<K: Debug + Ord + Hash, T: Debug> {
+pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
     max_size: usize,
     max_duration: Duration,
     // Cache of empty batch item buffers
-    cache: Vec<Vec<T>>,
+    cache: Vec<Vec<I>>,
     // Batches that have items in them but has not yet reached any limit in order of insertion
-    outstanding: LinkedHashMap<K, StreamBatch<T>>,
+    outstanding: LinkedHashMap<K, StreamBatch<I>>,
 }
 
-impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Clone, T: Debug {
-    pub fn new(max_size: usize, max_duration: Duration) -> MultistreamBatch<K, T> {
+impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
+    pub fn new(max_size: usize, max_duration: Duration) -> MultistreamBatch<K, I> {
         // Note that with max_size == 1 the insert function may never get to poll max_duration
         // expired batches
         assert!(max_size > 1, "MultistreamBatch::new bad max_size");
@@ -77,7 +77,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Clone, T: Debug 
     }
 
     /// Drain outstanding batch with given stream key.
-    pub fn drain_stream(&mut self, key: K) -> Option<(K, Drain<T>)> {
+    pub fn drain_stream(&mut self, key: K) -> Option<(K, Drain<I>)> {
         // Move items from outstanding to cache
         let items = self.outstanding.remove(&key)?.items;
         self.cache.push(items);
@@ -89,7 +89,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Clone, T: Debug 
     }
 
     /// Flush all outstanding stream batches starting from oldest.
-    pub fn flush(&mut self) -> Vec<(K, Vec<T>)> {
+    pub fn flush(&mut self) -> Vec<(K, Vec<I>)> {
         let cache = &mut self.cache;
         let outstanding = &mut self.outstanding;
 
@@ -114,7 +114,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Clone, T: Debug 
     }
 
     /// Pool for outstanding batches that reached duration limit.
-    fn poll(&mut self) -> PollResult<K, T> {
+    fn poll(&mut self) -> PollResult<K, I> {
         // Check oldest outstanding batch
         if let Some((key, batch)) = self.outstanding.front() {
             let since_start = Instant::now().duration_since(batch.created);
@@ -134,7 +134,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Clone, T: Debug 
 
     /// Append next item to a batch with given stream key.
     ///
-    /// Returns `PollResult::Ready(K, Drain<T>)` where `K` is key of ready batch and `T`
+    /// Returns `PollResult::Ready(K, Drain<I>)` where `K` is key of ready batch and `I`
     /// are the items in the batch.
     ///
     /// Batch will be ready to drain if:
@@ -143,7 +143,7 @@ impl<K, T> MultistreamBatch<K, T> where K: Debug + Ord + Hash + Clone, T: Debug 
     ///
     /// Returns `PollResult::NotReady(Option<Duration>)` when no batch has reached a limit with
     /// optional `Duration` of time until oldest batch reaches `max_duration` limit.
-    pub fn append(&mut self, key: K, item: T) -> PollResult<K, T> {
+    pub fn append(&mut self, key: K, item: I) -> PollResult<K, I> {
         // First look up in outstanding or move one from cache/create new batch
         let len = if let Some(batch) = self.outstanding.get_mut(&key) {
             batch.items.push(item);

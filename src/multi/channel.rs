@@ -7,27 +7,27 @@ use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use std::vec::Drain;
 
-/// Commands that can be send to `MultistreamBatchChannel` via `Sender` endpoint
+/// Commands that can be send to `MultistreamBatchChannel` via `Sender` endpoint.
 #[derive(Debug)]
-pub enum Command<K: Debug + Ord + Hash, T: Debug> {
-    /// Append item `T` to batch for stream with key `K`
-    Append(K, T),
-    /// Drain outstanding items from stream `K`
+pub enum Command<K: Debug + Ord + Hash, I: Debug> {
+    /// Append item `I` to batch for stream with key `K`.
+    Append(K, I),
+    /// Drain outstanding items from stream `K`.
     Drain(K),
 }
 
 #[derive(Debug)]
-pub struct MultistreamBatchChannel<K: Debug + Ord + Hash, T: Debug> {
-    channel: Receiver<Command<K, T>>,
-    mbatch: MultistreamBatch<K, T>,
-    flush: Option<Vec<(K, Vec<T>)>>,
+pub struct MultistreamBatchChannel<K: Debug + Ord + Hash, I: Debug> {
+    channel: Receiver<Command<K, I>>,
+    mbatch: MultistreamBatch<K, I>,
+    flush: Option<Vec<(K, Vec<I>)>>,
     flush_index: usize,
     // Instant at after which we can poll batch
     next_batch_at: Option<Instant>,
 }
 
-impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Clone + 'static, T: Debug + Send + 'static {
-    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<K, T>>, MultistreamBatchChannel<K, T>) {
+impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone + 'static, I: Debug + Send + 'static {
+    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<K, I>>, MultistreamBatchChannel<K, I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
         (sender, MultistreamBatchChannel {
@@ -39,7 +39,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
         })
     }
 
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl Fn(Sender<Command<K, T>>) -> () + Send + 'static) -> MultistreamBatchChannel<K, T> {
+    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl Fn(Sender<Command<K, I>>) -> () + Send + 'static) -> MultistreamBatchChannel<K, I> {
         let (sender, batch) = MultistreamBatchChannel::new(max_size, max_duration, channel_size);
 
         std::thread::spawn(move || {
@@ -50,7 +50,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
     }
 
     /* Won't compile without polonius support in rustc: https://gist.github.com/jpastuszek/559bc637c2715248bac62822a710ad36
-    pub fn next_batch<'i>(&'i mut self) -> Result<(K, Drain<'i, T>), EndOfStreamError> {
+    pub fn next_batch<'i>(&'i mut self) -> Result<(K, Drain<'i, I>), EndOfStreamError> {
         loop {
             match self.next() {
                 Ok(None) => continue,
@@ -68,7 +68,7 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
     /// Retruns `Ok(None)` if no batch was ready at this call, call again.
     /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all outstanding batches
     /// were flushed.
-    pub fn next<'i>(&'i mut self) -> Result<Option<(K, Drain<'i, T>)>, EndOfStreamError> {
+    pub fn next<'i>(&'i mut self) -> Result<Option<(K, Drain<'i, I>)>, EndOfStreamError> {
         if self.flush.is_some() {
             // Note that I can't use if let above or we move mut borrow here
             let batches = self.flush.as_mut().unwrap();

@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 // function to start iteration from begginging of the batch
 
 #[derive(Debug)]
-pub struct TxBatch<T: Debug> {
-    channel: Receiver<T>,
-    items: Vec<T>,
+pub struct TxBatch<I: Debug> {
+    channel: Receiver<I>,
+    items: Vec<I>,
     cursor: usize,
     max_size: usize,
     max_duration: Duration,
@@ -21,8 +21,8 @@ pub struct TxBatch<T: Debug> {
     batch_start: Option<Instant>,
 }
 
-impl<T: Debug> TxBatch<T> {
-    pub fn new(max_size: usize, max_duration: Duration) -> (Sender<T>, TxBatch<T>) {
+impl<I: Debug> TxBatch<I> {
+    pub fn new(max_size: usize, max_duration: Duration) -> (Sender<I>, TxBatch<I>) {
         let (sender, receiver) = crossbeam_channel::bounded(max_size * 2);
 
         (sender, TxBatch {
@@ -36,7 +36,7 @@ impl<T: Debug> TxBatch<T> {
         })
     }
 
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, producer: impl Fn(Sender<T>) -> () + Send + 'static) -> TxBatch<T> where T: Send + 'static {
+    pub fn with_producer_thread(max_size: usize, max_duration: Duration, producer: impl Fn(Sender<I>) -> () + Send + 'static) -> TxBatch<I> where I: Send + 'static {
         let (sender, batch) = TxBatch::new(max_size, max_duration);
 
         std::thread::spawn(move || {
@@ -61,7 +61,7 @@ impl<T: Debug> TxBatch<T> {
     /// with original first item time.
     ///
     /// After calling `commit` this function will behave as if new `Batch` object was crated.
-    pub fn next(&mut self) -> Option<&T> {
+    pub fn next(&mut self) -> Option<&I> {
         // Yield internal messages
         if self.cursor < self.items.len() {
             let item = &self.items[self.cursor];
