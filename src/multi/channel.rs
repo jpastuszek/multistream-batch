@@ -49,6 +49,18 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
         batch
     }
 
+    /* Won't compile without polonius support in rustc: https://gist.github.com/jpastuszek/559bc637c2715248bac62822a710ad36
+    pub fn next_batch<'i>(&'i mut self) -> Result<(K, Drain<'i, T>), EndOfStreamError> {
+        loop {
+            match self.next() {
+                Ok(None) => continue,
+                Ok(Some(kdrain)) => return Ok(kdrain),
+                Err(err) => return Err(err),
+            }
+        }
+    }
+    */
+
     /// Get next batch as pair of key and drain iterator for items.
     ///
     /// Call may block until item is received or batch duration limit was reached.
@@ -122,57 +134,6 @@ impl<K, T> MultistreamBatchChannel<K, T> where K: Debug + Ord + Hash + Send + Cl
             }
         }
     }
-
-    /* requires polonius: https://github.com/rust-lang/rust/issues/54663
-    pub fn next<'i>(&'i mut self) -> Result<(K, Drain<'i, T>), EndOfStreamError> {
-        if let Some(batches) = self.flush.as_mut() {
-            if self.flush_index >= batches.len() {
-                // Free memory
-                batches.clear();
-                return Err(EndOfStreamError);
-            }
-
-            let (key, items) = &mut batches[self.flush_index];
-            self.flush_index += 1;
-            return Ok((key.clone(), items.drain(0..)))
-        }
-
-        loop {
-            let item = match self.mbatch.poll() {
-                PollResult::Ready(key, drain) => return Ok((key, drain)),
-                PollResult::NotReady(None) => self.channel.recv().map_err(|_| EndOfStreamError),
-                PollResult::NotReady(Some(mut instant)) => {
-                    let now = Instant::now();
-                    // race
-                    if now < instant {
-                        instant = now;
-                    }
-
-                    match self.channel.recv_timeout(now.duration_since(instant)) {
-                        Ok(item) => Ok(item),
-                        // A batch should have reached max_duration limit try again
-                        Err(RecvTimeoutError::Timeout) => continue,
-                        // Other end gone
-                        Err(RecvTimeoutError::Disconnected) => Err(EndOfStreamError),
-                    }
-                }
-            };
-
-            match item {
-                Ok((key, item)) => match self.mbatch.append(key, item) {
-                    PollResult::Ready(key, drain) => return Ok((key, drain)),
-                    PollResult::NotReady(_) => continue,
-                },
-                Err(_eos) => {
-                    let batches = self.mbatch.flush();
-                    self.mbatch.clear_cache();
-                    self.flush = Some(batches);
-                    continue;
-                }
-            }
-        }
-    }
-    */
 }
 
 #[cfg(test)]
