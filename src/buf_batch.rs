@@ -12,26 +12,6 @@ pub enum PollResult {
     NotReady(Option<Instant>),
 }
 
-#[derive(Debug)]
-pub struct BatchDrain<'b, I: Debug>(&'b mut BufBatch<I>);
-
-impl<'b, I: Debug> BatchDrain<'b, I> {
-    /// Return items as new `Vec` and start new batch
-    pub fn split_off(&mut self) -> Vec<I> {
-        self.0.split_off()
-    }
-
-    /// Drain items from internal buffer and start new batch
-    pub fn drain(&mut self) -> Drain<I> {
-        self.0.drain()
-    }
-
-    /// Return slice from intranl item buffer
-    pub fn as_slice(&self) -> &[I] {
-        self.0.as_slice()
-    }
-}
-
 /// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
 #[derive(Debug)]
 pub struct BufBatch<I: Debug> {
@@ -75,6 +55,7 @@ impl<I: Debug> BufBatch<I> {
     }
 
     /// Drain items from internal buffer and start new batch
+    /// Assuming that `Drain` iterator is not leaked leading to stale items left in items buffer.
     pub fn drain(&mut self) -> Drain<I> {
         self.first_item = None;
         self.items.drain(0..)
@@ -98,10 +79,14 @@ impl<I: Debug> BufBatch<I> {
 
     /// Check if batch has reached its duration limit.
     /// 
-    /// Retruns `PollResult::Ready` if batch has reached its duration limit.
-    /// Retruns `PollNotReady(Some(instant))` if it is not ready yet but it will be ready at instant.
+    /// Retruns `PollResult::Ready` if batch has reached its one of its limit.
+    /// Retruns `PollNotReady(Some(instant))` if it is not ready yet but it will be ready at instant due to duration limit.
     /// Retruns `PollNotReady(None)` if it is not ready yet and has not received its first item.
     pub fn poll(&self) -> PollResult {
+        if self.items.len() >= self.max_size {
+            return PollResult::Ready
+        }
+
         if let Some(first_item) = self.first_item {
             let since_start = Instant::now().duration_since(first_item);
 
@@ -114,20 +99,14 @@ impl<I: Debug> BufBatch<I> {
         PollResult::NotReady(None)
     }
 
-    /// Appends item to batch and returns reference to item just inserted and PollResult indicating if any limit has been reached.
-    pub fn append(&mut self, item: I) -> (&I, PollResult) {
-        assert!(self.items.len() < self.max_size, "BufBatch append: append after batch ready but unconsumed");
-
-        self.items.push(item);
-        
-        if self.items.len() >= self.max_size {
-            let item = self.items.last().unwrap();
-            return (item, PollResult::Ready)
+    /// Appends item to batch and returns reference to item just inserted or `Err(I)` indicating that batch has reached one of its limits
+    /// and won't accept any more items.
+    pub fn append(&mut self, item: I) -> Result<&I, I> {
+        if let PollResult::Ready = self.poll() {
+            return Err(item)
         }
 
-        let result = self.poll();
-        let item = self.items.last().unwrap();
-        
-        (item, result)
+        self.items.push(item);
+        Ok(self.items.last().unwrap())
     }
 }

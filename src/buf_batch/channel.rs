@@ -75,65 +75,44 @@ impl<I: Debug> BufBatchChannel<I> {
     ///
     /// After calling `clear` this function will behave as if new `Batch` object was started.
     pub fn next(&mut self) -> Result<BatchResult<I>, EndOfStreamError> {
+        // No iternal messages left to yeld and channel is disconnected
+        if self.disconnected {
+            return Err(EndOfStreamError)
+        }
+
         loop {
-            // No iternal messages left to yeld and channel is disconnected
-            if self.disconnected {
-                return Err(EndOfStreamError)
-            }
+            // Check if we have a ready batch due to any limit or go fetch next item
+            let ready_at = match self.batch.poll() {
+                PollResult::Ready => return Ok(BatchResult::Complete),
+                PollResult::NotReady(instant) => instant,
+            };
 
-            if self.complete {
-                self.clear();
-                return Ok(BatchResult::Complete)
-            }
-
-            let now = Instant::now();
-
-            let recv_result = match self.ready_at.map(|instant| if instant <= now { None } else { Some(instant) }) {
-                // Batch ready to go
-                Some(None) => {
-                    // We should have ready batch but if not update ready_at and go again
-                    match self.batch.poll() {
-                        PollResult::Ready => {
-                            self.clear();
-                            return Ok(BatchResult::Complete)
-                        },
-                        PollResult::NotReady(instant) => {
-                            // Update instant here as batch could have been already returned by append
-                            self.ready_at = instant;
-                            continue
-                        }
-                    }
+            let recv_result = if let Some(instant) = ready_at {
+                let now = Instant::now();
+                if now >= instant {
+                    // Race between Instant::now() and .poll()
+                    continue
                 }
-                // Wait for batch duration limit or next item
-                Some(Some(instant)) => match self.channel.recv_timeout(instant.duration_since(now)) {
+                match self.channel.recv_timeout(instant.duration_since(now)) {
                     // We got new item before timeout was reached
                     Ok(item) => Ok(item),
                     // A batch should be ready now; go again
                     Err(RecvTimeoutError::Timeout) => continue,
                     // Other end gone
                     Err(RecvTimeoutError::Disconnected) => Err(EndOfStreamError),
-                },
+                }
+            } else {
                 // No outstanding batches; wait for first item
-                None => self.channel.recv().map_err(|_| EndOfStreamError),
+                self.channel.recv().map_err(|_| EndOfStreamError)
             };
 
             match recv_result {
                 Ok(Command::Append(item)) => match self.batch.append(item) {
-                    // Batch is now full
-                    (item, PollResult::Ready) => {
-                        // Next call will return BatchResult::Complete
-                        self.complete = true;
-                        return Ok(BatchResult::Item(item))
-                    },
-                    // Batch not yet full; note instant at witch oldest batch will reach its duration limit
-                    (item, PollResult::NotReady(instant)) => {
-                        self.ready_at = instant;
-                        return Ok(BatchResult::Item(item))
-                    }
+                    Ok(item) => return Ok(BatchResult::Item(item)),
+                    Err(_item) => panic!("poll returned NotReady but batch is not accepting items"),
                 },
                 Ok(Command::Complete) => {
                     // Mark as complete by producer
-                    self.clear();
                     return Ok(BatchResult::Complete)
                 },
                 Err(_eos) => {
