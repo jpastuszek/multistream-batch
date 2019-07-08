@@ -9,24 +9,24 @@ pub use channel::*;
 
 /// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
 #[derive(Debug)]
-struct StreamBatch<I: Debug> {
+struct OutstandingBatch<I: Debug> {
     items: Vec<I>,
     created: Instant,
 }
 
-impl<I: Debug> StreamBatch<I> {
-    fn new(capacity: usize) -> StreamBatch<I> {
-        StreamBatch {
+impl<I: Debug> OutstandingBatch<I> {
+    fn new(capacity: usize) -> OutstandingBatch<I> {
+        OutstandingBatch {
             items: Vec::with_capacity(capacity),
             created: Instant::now(),
         }
     }
 
-    fn from_cache(mut items: Vec<I>) -> StreamBatch<I> {
+    fn from_cache(mut items: Vec<I>) -> OutstandingBatch<I> {
         // Make sure nothing is left after undrained
         items.clear();
 
-        StreamBatch {
+        OutstandingBatch {
             items,
             created: Instant::now(),
         }
@@ -63,7 +63,7 @@ pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
     // Cache of empty batch item buffers
     cache: Vec<Vec<I>>,
     // Batches that have items in them but has not yet reached any limit in order of insertion
-    outstanding: LinkedHashMap<K, StreamBatch<I>>,
+    outstanding: LinkedHashMap<K, OutstandingBatch<I>>,
 }
 
 impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
@@ -157,9 +157,9 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
             batch.items.len()
         } else {
             let mut batch = if let Some(items) = self.cache.pop() {
-                StreamBatch::from_cache(items)
+                OutstandingBatch::from_cache(items)
             } else {
-                StreamBatch::new(self.max_size)
+                OutstandingBatch::new(self.max_size)
             };
 
             batch.items.push(item);
