@@ -250,38 +250,34 @@ mod tests {
         );
     }
 
-/*
     #[test]
-    fn test_batch_max_instant() {
-        let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
+    fn test_batch_max_duration() {
+        let mut batch = MultistreamBatch::new(4, Duration::from_millis(100));
 
         batch.append(0, 1);
+        batch.append(0, 2);
 
-        let expire_0 = match batch.poll() {
-            PollResult::NotReady(Some(instant)) => instant,
+        let ready_after = match batch.poll() {
+            PollResult::NotReady(Some(ready_after)) => ready_after,
             _ => panic!("expected NotReady with instant"),
         };
 
-        batch.append(0, 2);
-        assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert_eq!(instant, expire_0));
+        std::thread::sleep(ready_after);
 
-        batch.append(1, 1);
-        assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert_eq!(instant, expire_0));
-
-        batch.append(0, 3);
-        assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert_eq!(instant, expire_0));
-        batch.append(1, 2);
-        assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert_eq!(instant, expire_0));
-
-        batch.append(0, 4);
         assert_matches!(batch.poll(), PollResult::Ready(0) =>
-            assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+            assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [1, 2])
         );
 
-        batch.append(1, 3);
-        assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert!(instant > expire_0));
+        batch.append(0, 3);
+        batch.append(0, 4);
+        batch.append(0, 5);
+        batch.append(0, 6);
+
+        assert_matches!(batch.poll(), PollResult::Ready(0) =>
+            assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [3, 4, 5, 6])
+        );
     }
-*/
+
     #[test]
     fn test_drain_stream() {
         let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
