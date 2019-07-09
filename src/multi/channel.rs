@@ -151,6 +151,42 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
 
         return Ok(BatchResult::TryAgain)
     }
+
+    /// Starts new batch dropping all buffered items.
+    pub fn clear(&mut self, key: &K) {
+        self.batch.clear(key)
+    }
+
+    /// Consumes batch by copying items to newly allocated `Vec`.
+    pub fn split_off(&mut self, key: &K) -> Option<Vec<I>> {
+        self.batch.split_off(key)
+    }
+
+    /// Consumes batch by draining items from internal buffer.
+    pub fn drain(&mut self, key: &K) -> Option<Drain<I>> {
+        self.batch.drain(key)
+    }
+
+    /// Consumes batch by swapping items buffer with given `Vec` and clear.
+    /// Returns `Ok(())` if successfull.
+    pub fn swap(&mut self, key: &K, buffer: &mut Vec<I>) -> Result<(), ()> {
+        self.batch.swap(key, buffer)
+    }
+
+    /// Flushes all outstanding batches starting from oldest.
+    pub fn flush(&mut self) -> Vec<(K, Vec<I>)> {
+        self.batch.flush()
+    }
+
+    /// Returns slice of internal item buffer of given outstanding batch.
+    pub fn get(&self, key: &K) -> Option<&[I]> {
+        self.batch.get(key)
+    }
+
+    /// Drops cached batch buffers.
+    pub fn clear_cache(&mut self) {
+        self.batch.clear_cache()
+    }
 }
 
 #[cfg(test)]
