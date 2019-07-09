@@ -9,7 +9,7 @@ pub use channel::*;
 #[derive(Debug)]
 pub enum PollResult {
     Ready,
-    NotReady(Option<Instant>),
+    NotReady(Option<Duration>),
 }
 
 /// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
@@ -77,10 +77,10 @@ impl<I: Debug> BufBatch<I> {
         self.items.as_slice()
     }
 
-    /// Check if batch has reached its duration limit.
+    /// Check if batch has reached one of its limits.
     /// 
     /// Retruns `PollResult::Ready` if batch has reached its one of its limit.
-    /// Retruns `PollNotReady(Some(instant))` if it is not ready yet but it will be ready at instant due to duration limit.
+    /// Retruns `PollNotReady(Some(duration))` if it is not ready yet but it will be ready after duration due to duration limit.
     /// Retruns `PollNotReady(None)` if it is not ready yet and has not received its first item.
     pub fn poll(&self) -> PollResult {
         if self.items.len() >= self.max_size {
@@ -94,15 +94,17 @@ impl<I: Debug> BufBatch<I> {
                 return PollResult::Ready
             }
 
-            return PollResult::NotReady(Some(first_item + self.max_duration))
+            return PollResult::NotReady(Some(self.max_duration - since_start))
         }
         PollResult::NotReady(None)
     }
 
-    /// Appends item to batch and returns reference to item just inserted or `Err(I)` indicating that batch has reached one of its limits
-    /// and won't accept any more items.
+    /// Appends item to batch and returns reference to item just inserted or `Err(I)` indicating that batch has reached its max_size limit.
+    /// 
+    /// Note that `poll()` needs to be called before append to determine if batch has reached its duration limit. This function will not check
+    /// for duration limit as this woudl potentially race with call to `poll()`.
     pub fn append(&mut self, item: I) -> Result<&I, I> {
-        if let PollResult::Ready = self.poll() {
+        if self.items.len() >= self.max_size {
             return Err(item)
         }
 

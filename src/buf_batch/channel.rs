@@ -3,7 +3,8 @@ use crate::EndOfStreamError;
 use crate::buf_batch::{PollResult, BufBatch};
 
 use std::fmt::Debug;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::vec::Drain;
 
 /// Commands that can be send to `BufBatchChannel` via `Sender` endpoint.
 #[derive(Debug)]
@@ -29,10 +30,6 @@ pub struct BufBatchChannel<I: Debug> {
     batch: BufBatch<I>,
     // True when channel is disconnected
     disconnected: bool,
-    // True if batch is complete but commit or retry not called yet
-    complete: bool,
-    // Instant at which a batch would reach its duration limit
-    ready_at: Option<Instant>,
 }
 
 impl<I: Debug> BufBatchChannel<I> {
@@ -43,8 +40,6 @@ impl<I: Debug> BufBatchChannel<I> {
             channel: receiver,
             batch: BufBatch::new(max_size, max_duration),
             disconnected: false,
-            complete: false,
-            ready_at: None,
         })
     }
 
@@ -64,8 +59,10 @@ impl<I: Debug> BufBatchChannel<I> {
     ///
     /// Returns `Ok(BatchResult::Complete)` signaling end of batch if:
     /// * `max_size` of the batch was reached,
-    /// * `max_duration` since first element returned elapsed.
-    /// Caller is responsible for calling `retry` or `commit` after receiving `BatchResult::Complete`
+    /// * `max_duration` since first element returned elapsed,
+    /// * client sent `Command::Complete`.
+    /// 
+    /// Caller is responsible for consuming the batch via provided methods or calling `clear()`.
     ///
     /// This call will block indefinitely waiting for first item of the batch.
     ///
@@ -82,21 +79,16 @@ impl<I: Debug> BufBatchChannel<I> {
 
         loop {
             // Check if we have a ready batch due to any limit or go fetch next item
-            let ready_at = match self.batch.poll() {
+            let ready_after = match self.batch.poll() {
                 PollResult::Ready => return Ok(BatchResult::Complete),
-                PollResult::NotReady(instant) => instant,
+                PollResult::NotReady(ready_after) => ready_after,
             };
 
-            let recv_result = if let Some(instant) = ready_at {
-                let now = Instant::now();
-                if now >= instant {
-                    // Race between Instant::now() and .poll()
-                    continue
-                }
-                match self.channel.recv_timeout(instant.duration_since(now)) {
+            let recv_result = if let Some(ready_after) = ready_after {
+                match self.channel.recv_timeout(ready_after) {
                     // We got new item before timeout was reached
                     Ok(item) => Ok(item),
-                    // A batch should be ready now; go again
+                    // A batch should be ready now; try again
                     Err(RecvTimeoutError::Timeout) => continue,
                     // Other end gone
                     Err(RecvTimeoutError::Disconnected) => Err(EndOfStreamError),
@@ -117,10 +109,6 @@ impl<I: Debug> BufBatchChannel<I> {
                 },
                 Err(_eos) => {
                     self.disconnected = true;
-
-                    // There won't be next batch
-                    self.ready_at.take();
-
                     return Ok(BatchResult::Complete)
                 }
             };
@@ -128,11 +116,120 @@ impl<I: Debug> BufBatchChannel<I> {
     }
 
     /// Start new batch discarding buffered items.
-    /// 
-    /// Returns `Err(EndOfStreamError)` if channel was closed and there won't be any more items.
     pub fn clear(&mut self) {
         self.batch.clear();
-        self.complete = false;
-        self.ready_at = None;
+    }
+
+    /// Return items as new `Vec` and start new batch
+    pub fn split_off(&mut self) -> Vec<I> {
+        self.batch.split_off()
+    }
+
+    /// Drain items from internal buffer and start new batch
+    /// Assuming that `Drain` iterator is not leaked leading to stale items left in items buffer.
+    pub fn drain(&mut self) -> Drain<I> {
+        self.batch.drain()
+    }
+
+    /// Swap items buffer with given `Vec` and clear
+    pub fn swap(&mut self, items: &mut Vec<I>) {
+        self.batch.swap(items)
+    }
+
+    /// Convert into intrnal item buffer
+    pub fn into_vec(self) -> Vec<I> {
+        self.batch.into_vec()
+    }
+
+    /// Return slice from intranl item buffer
+    pub fn as_slice(&self) -> &[I] {
+        self.batch.as_slice()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    pub use super::*;
+    use std::time::Duration;
+    use assert_matches::assert_matches;
+
+    #[test]
+    fn test_batch_clear() {
+        let (sender, mut batch) = BufBatchChannel::new(2, Duration::from_secs(10));
+
+        sender.send(Command::Append(1)).unwrap();
+        sender.send(Command::Append(2)).unwrap();
+        sender.send(Command::Append(3)).unwrap();
+        sender.send(Command::Append(4)).unwrap();
+
+        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+
+        batch.clear();
+
+        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+    }
+
+    #[test]
+    fn test_batch_with_producer_thread() {
+        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), |sender| {
+            sender.send(Command::Append(1)).unwrap();
+            sender.send(Command::Append(2)).unwrap();
+            sender.send(Command::Append(3)).unwrap();
+            sender.send(Command::Append(4)).unwrap();
+        });
+
+        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+
+        batch.clear();
+
+        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+    }
+
+    #[test]
+    fn test_batch_max_duration() {
+        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_millis(100), |sender| {
+            sender.send(Command::Append(1)).unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+        });
+
+        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+    }
+
+    #[test]
+    fn test_batch_disconnected() {
+        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), |sender| {
+            sender.send(Command::Append(1)).unwrap();
+        });
+
+        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // disconnected
+        assert_matches!(batch.next(), Err(EndOfStreamError));
+    }
+
+    #[test]
+    fn test_batch_command_complete() {
+        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), |sender| {
+            sender.send(Command::Append(1)).unwrap();
+            sender.send(Command::Complete).unwrap();
+            sender.send(Command::Append(2)).unwrap();
+            sender.send(Command::Complete).unwrap();
+        });
+
+        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // Command::Complete
+
+        batch.clear();
+
+        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // Command::Complete
     }
 }
