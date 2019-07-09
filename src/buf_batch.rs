@@ -120,3 +120,110 @@ impl<I: Debug> BufBatch<I> {
         self.items.last().unwrap()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::*;
+    use std::time::Duration;
+    use assert_matches::assert_matches;
+
+    #[test]
+    fn test_batch_poll() {
+        let mut batch = BufBatch::new(4, Duration::from_secs(10));
+
+        // empty has no outstanding batches
+        assert_matches!(batch.poll(), PollResult::NotReady(None));
+
+        batch.append(1);
+
+        // now we have outstanding
+        assert_matches!(batch.poll(), PollResult::NotReady(Some(_instant)));
+
+        batch.append(2);
+        batch.append(3);
+        batch.append(4);
+
+        assert_matches!(batch.poll(), PollResult::Ready =>
+            assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        );
+
+        // no outstanding again
+        assert_matches!(batch.poll(), PollResult::NotReady(None));
+    }
+
+    #[test]
+    fn test_batch_max_size() {
+        let mut batch = BufBatch::new(4, Duration::from_secs(10));
+
+        batch.append(1);
+        batch.append(2);
+        batch.append(3);
+        batch.append(4);
+
+        assert_matches!(batch.poll(), PollResult::Ready =>
+            assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        );
+
+        batch.append(5);
+        batch.append(6);
+        batch.append(7);
+        batch.append(8);
+
+        assert_matches!(batch.poll(), PollResult::Ready =>
+            assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
+        );
+    }
+
+    #[test]
+    fn test_batch_max_duration() {
+        let mut batch = BufBatch::new(4, Duration::from_millis(100));
+
+        batch.append(1);
+        batch.append(2);
+
+        let ready_after = match batch.poll() {
+            PollResult::NotReady(Some(ready_after)) => ready_after,
+            _ => panic!("expected NotReady with instant"),
+        };
+
+        std::thread::sleep(ready_after);
+
+        assert_matches!(batch.poll(), PollResult::Ready =>
+            assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [1, 2])
+        );
+
+        batch.append(3);
+        batch.append(4);
+        batch.append(5);
+        batch.append(6);
+
+        assert_matches!(batch.poll(), PollResult::Ready =>
+            assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [3, 4, 5, 6])
+        );
+    }
+
+    #[test]
+    fn test_drain_stream() {
+        let mut batch = BufBatch::new(4, Duration::from_secs(10));
+
+        batch.append(1);
+        batch.append(2);
+        batch.append(3);
+
+        assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [1, 2, 3]);
+
+        batch.append(1);
+        batch.append(2);
+
+        assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [1, 2]);
+
+        batch.append(5);
+        batch.append(6);
+        batch.append(7);
+        batch.append(8);
+
+        assert_matches!(batch.poll(), PollResult::Ready =>
+            assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
+        );
+    }
+}
