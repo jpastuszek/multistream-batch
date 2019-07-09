@@ -84,6 +84,8 @@ impl<I: Debug> BufBatch<I> {
     /// * `PollNotReady(Some(duration))` if it is not ready yet but it will be ready after duration due to duration limit.
     /// * `PollNotReady(None)` if it is not ready yet and has not received its first item.
     pub fn poll(&self) -> PollResult {
+        debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
+
         if self.items.len() >= self.max_size {
             return PollResult::Ready
         }
@@ -105,11 +107,11 @@ impl<I: Debug> BufBatch<I> {
     /// It is a contract error to append batch that is ready according to `poll()`.
     /// Panics if trying to append a batch that reached its `max_size` limit.
     pub fn append(&mut self, item: I) -> &I {
+        debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
+
         if self.items.len() >= self.max_size {
             panic!("BufBatch append on full batch");
         }
-
-        debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
 
         // Count `max_duration` from first item inserted
         self.first_item.get_or_insert_with(|| Instant::now());
