@@ -115,6 +115,11 @@ impl<I: Debug> BufBatchChannel<I> {
         }
     }
 
+    /// Check if previous `next` call detected channel to be disconnected.
+    pub fn is_disconnected(&self) -> bool {
+        self.disconnected
+    }
+
     /// Start new batch discarding buffered items.
     pub fn clear(&mut self) {
         self.batch.clear();
@@ -201,7 +206,8 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_duration
+        assert!(!batch.is_disconnected()); // check if Complete result was not because thread has finished
     }
 
     #[test]

@@ -49,14 +49,13 @@ impl<I: Debug> BufBatch<I> {
         self.items.clear();
     }
 
-    /// Consume batch by return items in newly allocated `Vec`.
+    /// Consume batch by copying items to newly allocated `Vec`.
     pub fn split_off(&mut self) -> Vec<I> {
         self.first_item = None;
         self.items.split_off(0)
     }
 
     /// Consume batch by draining items from internal buffer.
-    /// Note that if `Drain` iterator is leaked some left over items may remain an be part of next batch.
     pub fn drain(&mut self) -> Drain<I> {
         self.first_item = None;
         self.items.drain(0..)
@@ -109,6 +108,11 @@ impl<I: Debug> BufBatch<I> {
         if self.items.len() >= self.max_size {
             panic!("BufBatch append on full batch");
         }
+
+        debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
+
+        // Count `max_duration` from first item inserted
+        self.first_item.get_or_insert_with(|| Instant::now());
 
         self.items.push(item);
         self.items.last().unwrap()
