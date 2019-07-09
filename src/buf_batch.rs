@@ -22,15 +22,15 @@ pub struct BufBatch<I: Debug> {
 }
 
 impl<I: Debug> BufBatch<I> {
-    /// Create batch given maximum batch size in number of items (`max_size`)
-    /// and maximum duration a batch can last (`max_duration`) since first item appended to it. 
+    /// Creates batch given maximum batch size in number of items (`max_size`)
+    /// and maximum duration that batch can last (`max_duration`) since first item appended to it. 
     pub fn new(max_size: usize, max_duration: Duration) -> BufBatch<I> {
-        Self::from_vec(max_size, max_duration, Vec::with_capacity(max_size))
+        Self::from_vec(max_size, max_duration, Vec::new())
     }
 
-    /// Reuse existing `Vec` as item buffer.
+    /// Creates batch by reusing existing `Vec` to store items.
     pub fn from_vec(max_size: usize, max_duration: Duration, mut items: Vec<I>) -> BufBatch<I> {
-        // Make sure nothing is left after undrained
+        // Make sure nothing is left in the buffer
         items.clear();
 
         assert!(max_size > 0, "BufBatch::new/from_vec bad max_size");
@@ -61,28 +61,28 @@ impl<I: Debug> BufBatch<I> {
         self.items.drain(0..)
     }
 
-    /// Consume batch by swapping items buffer with given `Vec` and clear
+    /// Consume batch by swapping items buffer with given `Vec` and clear.
     pub fn swap(&mut self, items: &mut Vec<I>) {
         std::mem::swap(&mut self.items, items);
         self.clear();
     }
 
-    /// Convert into internal item buffer
+    /// Convert into internal item buffer.
     pub fn into_vec(self) -> Vec<I> {
         self.items
     }
 
-    /// Return slice from internal item buffer
+    /// Return slice from internal item buffer.
     pub fn as_slice(&self) -> &[I] {
         self.items.as_slice()
     }
 
-    /// Check if batch has reached one of its limits.
+    /// Checks if batch has reached one of its limits.
     /// 
     /// Returns:
-    /// * `PollResult::Ready` if batch has reached one of its limit and is ready to be consumed.
-    /// * `PollNotReady(Some(duration))` if it is not ready yet but it will be ready after duration due to duration limit.
-    /// * `PollNotReady(None)` if it is not ready yet and has not received its first item.
+    /// * `PollResult::Ready` - batch has reached one of its limit and is ready to be consumed,
+    /// * `PollNotReady(Some(duration))` - batch is not ready yet but it will be ready after duration due to duration limit,
+    /// * `PollNotReady(None)` batch is not ready yet and has not received its first item.
     pub fn poll(&self) -> PollResult {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
 
@@ -102,10 +102,11 @@ impl<I: Debug> BufBatch<I> {
         PollResult::NotReady(None)
     }
 
-    /// Appends item to batch and returns reference to item just inserted.
+    /// Appends item to batch and returns reference to that item.
     /// 
-    /// It is a contract error to append batch that is ready according to `poll()`.
-    /// Panics if trying to append a batch that reached its `max_size` limit.
+    /// It is an contract error to append batch that is ready according to `self.poll()`.
+    /// 
+    /// Panics if batch has already reached its `max_size` limit.
     pub fn append(&mut self, item: I) -> &I {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
 
@@ -131,12 +132,12 @@ mod tests {
     fn test_batch_poll() {
         let mut batch = BufBatch::new(4, Duration::from_secs(10));
 
-        // empty has no outstanding batches
+        // Empty has no outstanding batches
         assert_matches!(batch.poll(), PollResult::NotReady(None));
 
         batch.append(1);
 
-        // now we have outstanding
+        // Now we have outstanding
         assert_matches!(batch.poll(), PollResult::NotReady(Some(_instant)));
 
         batch.append(2);
@@ -147,7 +148,7 @@ mod tests {
             assert_eq!(batch.drain().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
         );
 
-        // no outstanding again
+        // No outstanding again
         assert_matches!(batch.poll(), PollResult::NotReady(None));
     }
 

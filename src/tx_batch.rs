@@ -20,6 +20,8 @@ pub struct TxBatch<I: Debug> {
 }
 
 impl<I: Debug> TxBatch<I> {
+    /// Creates batch given maximum batch size in number of items (`max_size`)
+    /// and maximum duration that batch can last (`max_duration`) since first item appended to it. 
     pub fn new(max_size: usize, max_duration: Duration) -> (Sender<Command<I>>, TxBatch<I>) {
         let (sender, buf_batch) = BufBatchChannel::new(max_size, max_duration);
         (sender, TxBatch {
@@ -71,40 +73,39 @@ impl<I: Debug> TxBatch<I> {
         self.batch.next()
     }
 
-    /// Start new batch discarding buffered items.
+    /// Retry batch making `next` to iterate already collected batch items starting from oldest one.
+    pub fn retry(&mut self) {
+        self.retry = Some(self.as_slice().len());
+    }
+
+    /// Start new batch dropping all buffered items.
     pub fn clear(&mut self) {
         self.batch.clear();
     }
 
-    /// Return items as new `Vec` and start new batch
+    /// Consume batch by copying items to newly allocated `Vec`.
     pub fn split_off(&mut self) -> Vec<I> {
         self.batch.split_off()
     }
 
-    /// Drain items from internal buffer and start new batch
-    /// Assuming that `Drain` iterator is not leaked leading to stale items left in items buffer.
+    /// Consume batch by draining items from internal buffer.
     pub fn drain(&mut self) -> Drain<I> {
         self.batch.drain()
     }
 
-    /// Swap items buffer with given `Vec` and clear
+    /// Consume batch by swapping items buffer with given `Vec` and clear.
     pub fn swap(&mut self, items: &mut Vec<I>) {
         self.batch.swap(items)
     }
 
-    /// Convert into intrnal item buffer
+    /// Convert into internal item buffer.
     pub fn into_vec(self) -> Vec<I> {
         self.batch.into_vec()
     }
 
-    /// Return slice from intranl item buffer
+    /// Return slice from internal item buffer.
     pub fn as_slice(&self) -> &[I] {
         self.batch.as_slice()
-    }
-
-    /// Retry batch making `next` to iterate already collected batch items starting from oldest one.
-    pub fn retry(&mut self) {
-        self.retry = Some(self.as_slice().len());
     }
 }
 
