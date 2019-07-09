@@ -15,9 +15,9 @@ struct OutstandingBatch<I: Debug> {
 }
 
 impl<I: Debug> OutstandingBatch<I> {
-    fn new(capacity: usize) -> OutstandingBatch<I> {
+    fn new() -> OutstandingBatch<I> {
         OutstandingBatch {
-            items: Vec::with_capacity(capacity),
+            items: Vec::new(),
             created: Instant::now(),
         }
     }
@@ -170,7 +170,7 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
             let mut batch = if let Some(items) = self.cache.pop() {
                 OutstandingBatch::from_cache(items)
             } else {
-                OutstandingBatch::new(self.max_size)
+                OutstandingBatch::new()
             };
 
             batch.items.push(item);
