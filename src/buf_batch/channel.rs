@@ -99,10 +99,10 @@ impl<I: Debug> BufBatchChannel<I> {
             };
 
             match recv_result {
-                Ok(Command::Append(item)) => match self.batch.append(item) {
-                    Ok(item) => return Ok(BatchResult::Item(item)),
-                    Err(_item) => panic!("poll returned NotReady but batch is not accepting items"),
-                },
+                Ok(Command::Append(item)) => {
+                    let item = self.batch.append(item);
+                    return Ok(BatchResult::Item(item))
+                }
                 Ok(Command::Complete) => {
                     // Mark as complete by producer
                     return Ok(BatchResult::Complete)

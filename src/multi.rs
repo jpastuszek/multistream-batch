@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use linked_hash_map::LinkedHashMap;
-use linked_hash_set::LinkedHashSet;
 use std::hash::Hash;
 use std::vec::Drain;
 
@@ -60,7 +59,7 @@ pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
     // Batches that have items in them but has not yet reached any limit in order of insertion
     outstanding: LinkedHashMap<K, OutstandingBatch<I>>,
     // Batch with key K is ready to be consumed due to reaching max_size limit
-    full: LinkedHashSet<K>,
+    full: Option<K>,
 }
 
 impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
@@ -82,7 +81,9 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
     /// Drain outstanding batch with given stream key.
     pub fn drain(&mut self, key: &K) -> Option<Drain<I>> {
         // If consuming full key clear it
-        self.full.remove(key);
+        if self.full.as_ref().filter(|fkey| *fkey == key).is_some() {
+            self.full.take();
+        }
 
         // Move items from outstanding to cache
         let items = self.outstanding.remove(key)?.items;
@@ -122,7 +123,7 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
     /// Poll for outstanding batches that reached duration limit.
     fn poll(&self) -> PollResult<K> {
         // Check oldest full batch first to make sure that following call to append won't fail
-        if let Some(key) = self.full.front() {
+        if let Some(key) = &self.full {
             return PollResult::Ready(key.clone())
         }
 
@@ -151,19 +152,19 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
     ///
     /// Returns `PollResult::NotReady(Option<Duration>)` when no batch has reached a limit with
     /// optional `Instance` of time at which oldest batch reaches `max_duration` limit.
-    pub fn append(&mut self, key: K, item: I) -> Result<(), I> {
+    pub fn append(&mut self, key: K, item: I) {
         // Look up batch in outstanding or crate one using cached or new items buffer
         if let Some(batch) = self.outstanding.get_mut(&key) {
             // Reached max_size limit
             if batch.items.len() >= self.max_size {
-                return Err(item)
+                panic!("MultistreamBatch append on full batch");
             }
 
             batch.items.push(item);
 
             // Mark as full
             if batch.items.len() >= self.max_size {
-                self.full.insert(key);
+                self.full = Some(key);
             }
         } else {
             let mut batch = if let Some(items) = self.cache.pop() {
@@ -175,8 +176,6 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
             batch.items.push(item);
             self.outstanding.insert(key.clone(), batch);
         }
-
-        Ok(())
     }
 }
 
@@ -193,14 +192,14 @@ mod tests {
         // empty has no outstanding batches
         assert_matches!(batch.poll(), PollResult::NotReady(None));
 
-        assert!(batch.append(0, 1).is_ok());
+        batch.append(0, 1);
 
         // now we have outstanding
         assert_matches!(batch.poll(), PollResult::NotReady(Some(_instant)));
 
-        assert!(batch.append(0, 2).is_ok());
-        assert!(batch.append(0, 3).is_ok());
-        assert!(batch.append(0, 4).is_ok());
+        batch.append(0, 2);
+        batch.append(0, 3);
+        batch.append(0, 4);
 
         assert_matches!(batch.poll(), PollResult::Ready(0) =>
             assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
@@ -214,37 +213,37 @@ mod tests {
     fn test_batch_max_size() {
         let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
 
-        assert!(batch.append(0, 1).is_ok());
-        assert!(batch.append(0, 2).is_ok());
-        assert!(batch.append(0, 3).is_ok());
-        assert!(batch.append(0, 4).is_ok());
+        batch.append(0, 1);
+        batch.append(0, 2);
+        batch.append(0, 3);
+        batch.append(0, 4);
 
         assert_matches!(batch.poll(), PollResult::Ready(0) =>
             assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
         );
 
-        assert!(batch.append(0, 5).is_ok());
-        assert!(batch.append(0, 6).is_ok());
-        assert!(batch.append(0, 7).is_ok());
-        assert!(batch.append(0, 8).is_ok());
+        batch.append(0, 5);
+        batch.append(0, 6);
+        batch.append(0, 7);
+        batch.append(0, 8);
 
         assert_matches!(batch.poll(), PollResult::Ready(0) =>
             assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
         );
 
-        assert!(batch.append(1, 1).is_ok());
-        assert!(batch.append(0, 9).is_ok());
-        assert!(batch.append(1, 2).is_ok());
-        assert!(batch.append(0, 10).is_ok());
-        assert!(batch.append(1, 3).is_ok());
-        assert!(batch.append(0, 11).is_ok());
-        assert!(batch.append(1, 4).is_ok());
+        batch.append(1, 1);
+        batch.append(0, 9);
+        batch.append(1, 2);
+        batch.append(0, 10);
+        batch.append(1, 3);
+        batch.append(0, 11);
+        batch.append(1, 4);
 
         assert_matches!(batch.poll(), PollResult::Ready(1) =>
             assert_eq!(batch.drain(&1).unwrap().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
         );
 
-        assert!(batch.append(0, 12).is_ok());
+        batch.append(0, 12);
 
         assert_matches!(batch.poll(), PollResult::Ready(0) =>
             assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [9, 10, 11, 12])
@@ -256,30 +255,30 @@ mod tests {
     fn test_batch_max_instant() {
         let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
 
-        assert!(batch.append(0, 1).is_ok());
+        batch.append(0, 1);
 
         let expire_0 = match batch.poll() {
             PollResult::NotReady(Some(instant)) => instant,
             _ => panic!("expected NotReady with instant"),
         };
 
-        assert!(batch.append(0, 2).is_ok());
+        batch.append(0, 2);
         assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert_eq!(instant, expire_0));
 
-        assert!(batch.append(1, 1).is_ok());
+        batch.append(1, 1);
         assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert_eq!(instant, expire_0));
 
-        assert!(batch.append(0, 3).is_ok());
+        batch.append(0, 3);
         assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert_eq!(instant, expire_0));
-        assert!(batch.append(1, 2).is_ok());
+        batch.append(1, 2);
         assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert_eq!(instant, expire_0));
 
-        assert!(batch.append(0, 4).is_ok());
+        batch.append(0, 4);
         assert_matches!(batch.poll(), PollResult::Ready(0) =>
             assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
         );
 
-        assert!(batch.append(1, 3).is_ok());
+        batch.append(1, 3);
         assert_matches!(batch.poll(), PollResult::NotReady(Some(instant)) => assert!(instant > expire_0));
     }
 */
@@ -287,12 +286,12 @@ mod tests {
     fn test_drain_stream() {
         let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
 
-        assert!(batch.append(0, 1).is_ok());
-        assert!(batch.append(0, 2).is_ok());
-        assert!(batch.append(0, 3).is_ok());
+        batch.append(0, 1);
+        batch.append(0, 2);
+        batch.append(0, 3);
 
-        assert!(batch.append(1, 1).is_ok());
-        assert!(batch.append(1, 2).is_ok());
+        batch.append(1, 1);
+        batch.append(1, 2);
 
         assert_matches!(batch.drain(&1), Some(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
@@ -302,10 +301,10 @@ mod tests {
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3])
         );
 
-        assert!(batch.append(0, 5).is_ok());
-        assert!(batch.append(0, 6).is_ok());
-        assert!(batch.append(0, 7).is_ok());
-        assert!(batch.append(0, 8).is_ok());
+        batch.append(0, 5);
+        batch.append(0, 6);
+        batch.append(0, 7);
+        batch.append(0, 8);
 
         assert_matches!(batch.poll(), PollResult::Ready(0) =>
             assert_eq!(batch.drain(&0).unwrap().collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
@@ -316,12 +315,11 @@ mod tests {
     fn test_flush() {
         let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
 
-        assert!(batch.append(0, 1).is_ok());
-        assert!(batch.append(1, 1).is_ok());
-        assert!(batch.append(0, 2).is_ok());
-        assert!(batch.append(1, 2).is_ok());
-        assert!(batch.append(0, 3).is_ok());
-
+        batch.append(0, 1);
+        batch.append(1, 1);
+        batch.append(0, 2);
+        batch.append(1, 2);
+        batch.append(0, 3);
 
         let batches = batch.flush();
 

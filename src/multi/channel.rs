@@ -134,25 +134,22 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
         };
 
         match recv_result {
-            Ok(Command::Append(key, item)) => match self.batch.append(key, item) {
-                Ok(()) => return Ok(BatchResult::TryAgain),
-                Err(_item) => panic!("poll returned NotReady but batch is not accepting items"),
-            },
             Ok(Command::Drain(key)) => {
                 // Mark as complete by producer
                 if let Some(drain) = self.batch.drain(&key) {
                     return Ok(BatchResult::Complete(key, drain))
                 }
-                return Ok(BatchResult::TryAgain)
             },
+            Ok(Command::Append(key, item)) => self.batch.append(key, item),
             Err(_eos) => {
                 // Flush batches and free memory
                 let batches = self.batch.flush();
                 self.batch.clear_cache();
                 self.flush = Some(batches);
-                return Ok(BatchResult::TryAgain)
             }
-        };
+        }
+
+        return Ok(BatchResult::TryAgain)
     }
 }
 

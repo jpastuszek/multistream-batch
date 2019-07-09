@@ -22,12 +22,13 @@ pub struct BufBatch<I: Debug> {
 }
 
 impl<I: Debug> BufBatch<I> {
-    /// `max_duration` since this batch was crated or reset
+    /// Create batch given maximum batch size in number of items (`max_size`)
+    /// and maximum duration a batch can last (`max_duration`) since first item appended to it. 
     pub fn new(max_size: usize, max_duration: Duration) -> BufBatch<I> {
         Self::from_vec(max_size, max_duration, Vec::with_capacity(max_size))
     }
 
-    /// Reuse existing `Vec`
+    /// Reuse existing `Vec` as item buffer.
     pub fn from_vec(max_size: usize, max_duration: Duration, mut items: Vec<I>) -> BufBatch<I> {
         // Make sure nothing is left after undrained
         items.clear();
@@ -42,46 +43,47 @@ impl<I: Debug> BufBatch<I> {
         }
     }
 
-    /// Clear items and start new batch
+    /// Start new batch dropping all buffered items.
     pub fn clear(&mut self) {
         self.first_item = None;
         self.items.clear();
     }
 
-    /// Return items as new `Vec` and start new batch
+    /// Consume batch by return items in newly allocated `Vec`.
     pub fn split_off(&mut self) -> Vec<I> {
         self.first_item = None;
         self.items.split_off(0)
     }
 
-    /// Drain items from internal buffer and start new batch
-    /// Assuming that `Drain` iterator is not leaked leading to stale items left in items buffer.
+    /// Consume batch by draining items from internal buffer.
+    /// Note that if `Drain` iterator is leaked some left over items may remain an be part of next batch.
     pub fn drain(&mut self) -> Drain<I> {
         self.first_item = None;
         self.items.drain(0..)
     }
 
-    /// Swap items buffer with given `Vec` and clear
+    /// Consume batch by swapping items buffer with given `Vec` and clear
     pub fn swap(&mut self, items: &mut Vec<I>) {
         std::mem::swap(&mut self.items, items);
         self.clear();
     }
 
-    /// Convert into intrnal item buffer
+    /// Convert into internal item buffer
     pub fn into_vec(self) -> Vec<I> {
         self.items
     }
 
-    /// Return slice from intranl item buffer
+    /// Return slice from internal item buffer
     pub fn as_slice(&self) -> &[I] {
         self.items.as_slice()
     }
 
     /// Check if batch has reached one of its limits.
     /// 
-    /// Retruns `PollResult::Ready` if batch has reached its one of its limit.
-    /// Retruns `PollNotReady(Some(duration))` if it is not ready yet but it will be ready after duration due to duration limit.
-    /// Retruns `PollNotReady(None)` if it is not ready yet and has not received its first item.
+    /// Returns:
+    /// * `PollResult::Ready` if batch has reached one of its limit and is ready to be consumed.
+    /// * `PollNotReady(Some(duration))` if it is not ready yet but it will be ready after duration due to duration limit.
+    /// * `PollNotReady(None)` if it is not ready yet and has not received its first item.
     pub fn poll(&self) -> PollResult {
         if self.items.len() >= self.max_size {
             return PollResult::Ready
@@ -99,16 +101,16 @@ impl<I: Debug> BufBatch<I> {
         PollResult::NotReady(None)
     }
 
-    /// Appends item to batch and returns reference to item just inserted or `Err(I)` indicating that batch has reached its max_size limit.
+    /// Appends item to batch and returns reference to item just inserted.
     /// 
-    /// Note that `poll()` needs to be called before append to determine if batch has reached its duration limit. This function will not check
-    /// for duration limit as this woudl potentially race with call to `poll()`.
-    pub fn append(&mut self, item: I) -> Result<&I, I> {
+    /// It is a contract error to append batch that is ready according to `poll()`.
+    /// Panics if trying to append a batch that reached its `max_size` limit.
+    pub fn append(&mut self, item: I) -> &I {
         if self.items.len() >= self.max_size {
-            return Err(item)
+            panic!("BufBatch append on full batch");
         }
 
         self.items.push(item);
-        Ok(self.items.last().unwrap())
+        self.items.last().unwrap()
     }
 }
