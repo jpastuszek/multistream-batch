@@ -55,7 +55,7 @@ impl<I: Debug> BufBatchChannel<I> {
         batch
     }
 
-    /// Get next item from the batch.
+    /// Gets next item from the batch.
     ///
     /// Returns `Ok(BatchResult::Item(I))` with next item of the batch.
     ///
@@ -117,37 +117,37 @@ impl<I: Debug> BufBatchChannel<I> {
         }
     }
 
-    /// Check if previous `next` call detected channel to be disconnected.
+    /// Checks if previous `self.next()` call found channel to be disconnected.
     pub fn is_disconnected(&self) -> bool {
         self.disconnected
     }
 
-    /// Start new batch dropping all buffered items.
+    /// Starts new batch dropping all buffered items.
     pub fn clear(&mut self) {
         self.batch.clear();
     }
 
-    /// Consume batch by copying items to newly allocated `Vec`.
+    /// Consumes batch by copying items to newly allocated `Vec`.
     pub fn split_off(&mut self) -> Vec<I> {
         self.batch.split_off()
     }
 
-    /// Consume batch by draining items from internal buffer.
+    /// Consumes batch by draining items from internal buffer.
     pub fn drain(&mut self) -> Drain<I> {
         self.batch.drain()
     }
 
-    /// Consume batch by swapping items buffer with given `Vec` and clear.
+    /// Consumes batch by swapping items buffer with given `Vec` and clear.
     pub fn swap(&mut self, items: &mut Vec<I>) {
         self.batch.swap(items)
     }
 
-    /// Convert into internal item buffer.
+    /// Converts into internal item buffer.
     pub fn into_vec(self) -> Vec<I> {
         self.batch.into_vec()
     }
 
-    /// Return slice from internal item buffer.
+    /// Returns slice of internal item buffer.
     pub fn as_slice(&self) -> &[I] {
         self.batch.as_slice()
     }

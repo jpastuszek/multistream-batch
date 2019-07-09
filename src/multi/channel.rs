@@ -42,7 +42,7 @@ pub struct MultistreamBatchChannel<K: Debug + Ord + Hash, I: Debug> {
 }
 
 impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone + 'static, I: Debug + Send + 'static {
-    /// Create new instance of `MultistreamBatchChannel` given maximum size of any single batch in number of items (`max_size`)
+    /// Creates new instance of `MultistreamBatchChannel` given maximum size of any single batch in number of items (`max_size`)
     /// and maximum duration a batch can last (`max_duration`). 
     /// 
     /// Internally bounded `crossbeam` channel is used with `channel_size` capacity.
@@ -60,7 +60,7 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
         })
     }
 
-    /// Create `MultistreamBatchChannel` with sender end embedded in newly spawned thread.
+    /// Creates `MultistreamBatchChannel` with sender end embedded in newly spawned thread.
     /// 
     /// `producer` closure will be called in context of newly spawned thread with `Sender<Command<K, I>>` endpoint provided as first argument.
     /// Returns `MultistreamBatchChannel` connected with the sender.
@@ -86,7 +86,7 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
     }
     */
 
-    /// Get next batch as pair of key and drain iterator for items.
+    /// Gets next batch as pair of key and drain iterator for items.
     ///
     /// This call may block until item is received or batch duration limit was reached.
     /// It may also return `Ok(BatchResult::TryAgain)` if no batch was ready at this time without blocking. 

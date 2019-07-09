@@ -43,36 +43,36 @@ impl<I: Debug> BufBatch<I> {
         }
     }
 
-    /// Start new batch dropping all buffered items.
+    /// Starts new batch dropping all buffered items.
     pub fn clear(&mut self) {
         self.first_item = None;
         self.items.clear();
     }
 
-    /// Consume batch by copying items to newly allocated `Vec`.
+    /// Consumes batch by copying items to newly allocated `Vec`.
     pub fn split_off(&mut self) -> Vec<I> {
         self.first_item = None;
         self.items.split_off(0)
     }
 
-    /// Consume batch by draining items from internal buffer.
+    /// Consumes batch by draining items from internal buffer.
     pub fn drain(&mut self) -> Drain<I> {
         self.first_item = None;
         self.items.drain(0..)
     }
 
-    /// Consume batch by swapping items buffer with given `Vec` and clear.
+    /// Consumes batch by swapping items buffer with given `Vec` and clear.
     pub fn swap(&mut self, items: &mut Vec<I>) {
         std::mem::swap(&mut self.items, items);
         self.clear();
     }
 
-    /// Convert into internal item buffer.
+    /// Converts into internal item buffer.
     pub fn into_vec(self) -> Vec<I> {
         self.items
     }
 
-    /// Return slice from internal item buffer.
+    /// Returns slice of internal item buffer.
     pub fn as_slice(&self) -> &[I] {
         self.items.as_slice()
     }

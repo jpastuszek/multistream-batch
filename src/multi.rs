@@ -36,20 +36,21 @@ impl<I: Debug> OutstandingBatch<I> {
 /// Represents result from `poll` and `append` functions where batch is `Ready` to be consumed or `NotReady` yet.
 #[derive(Debug)]
 pub enum PollResult<K: Debug> {
-    /// Batch is complete after reaching one of the limits; stream key and
-    /// `Drain` iterator for the batch items are provided.
+    /// Batch is complete after reaching one of the limits.
     Ready(K),
-    /// No outstanding batch reached a limit; provides optional `Duration` until first `max_duration` limit will be reached
-    /// if there is an outstanding stream batch.
+    /// No outstanding batch reached a limit. 
+    /// Provides optional `Duration` after which `max_duration` limit will be reached
+    /// if there is an outstanding batches.
     NotReady(Option<Duration>),
 }
 
-/// Collect items into multiple batches based on stream key. This base implementation does not handle actual waiting on batch duration timeouts.
+/// Collect items into multiple batches based on stream key. 
+/// This base implementation does not handle actual waiting on batch duration timeouts.
 /// 
-/// When given batch limits are reached iterator draining the batch items is provided.
+/// When a batch limit is reached iterator draining the batch items is provided.
 /// Batch given by stream key can also be manually flushed.
 ///
-/// Batch buffers are cached to avoid allocations.
+/// Batch item buffers are cached and reused to avoid allocations.
 #[derive(Debug)]
 pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
     max_size: usize,
@@ -63,7 +64,7 @@ pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
 }
 
 impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
-    /// Crate new `MultistreamBatch` with given maximum size (`max_size`) of batch and maximum duration (`max_duration`) since batch was crated (first item appended) limits.
+    /// Crates new `MultistreamBatch` with given maximum size (`max_size`) of batch and maximum duration (`max_duration`) since batch was crated (first item appended) limits.
     /// 
     /// Panics if `max_size` == 0.
     pub fn new(max_size: usize, max_duration: Duration) -> MultistreamBatch<K, I> {
@@ -78,8 +79,8 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         }
     }
 
-    /// Drain outstanding batch with given stream key.
-    pub fn drain(&mut self, key: &K) -> Option<Drain<I>> {
+    /// Moves outstanding batch item buffor to cache and returns its `&mut` reference.
+    fn move_to_cache(&mut self, key: &K) -> Option<&mut Vec<I>> {
         // If consuming full key clear it
         if self.full.as_ref().filter(|fkey| *fkey == key).is_some() {
             self.full.take();
@@ -88,14 +89,35 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         // Move items from outstanding to cache
         let items = self.outstanding.remove(key)?.items;
         self.cache.push(items);
-        let items = self.cache.last_mut().unwrap();
-
-        // Drain items
-        let drain = items.drain(0..);
-        Some(drain)
+        self.cache.last_mut()
     }
 
-    /// Flush all outstanding stream batches starting from oldest.
+    /// Starts new batch dropping all buffered items.
+    pub fn clear(&mut self, key: &K) {
+        self.move_to_cache(key).map(|items| items.clear());
+    }
+
+    /// Consumes batch by copying items to newly allocated `Vec`.
+    pub fn split_off(&mut self, key: &K) -> Option<Vec<I>> {
+        self.move_to_cache(key).map(|items| items.split_off(0))
+    }
+
+    /// Consumes batch by draining items from internal buffer.
+    pub fn drain(&mut self, key: &K) -> Option<Drain<I>> {
+        self.move_to_cache(key).map(|items| items.drain(0..))
+    }
+
+    /// Consumes batch by swapping items buffer with given `Vec` and clear.
+    /// Returns `Ok(())` if successfull.
+    pub fn swap(&mut self, key: &K, buffer: &mut Vec<I>) -> Result<(), ()> {
+        self.move_to_cache(key).map(|items| {
+            buffer.clear();
+            std::mem::swap(items, buffer);
+            ()
+        }).ok_or(())
+    }
+
+    /// Flushes all outstanding batches starting from oldest.
     pub fn flush(&mut self) -> Vec<(K, Vec<I>)> {
         let cache = &mut self.cache;
         let outstanding = &mut self.outstanding;
@@ -115,12 +137,17 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         }).collect()
     }
 
-    /// Drop cached batch buffers.
+    /// Returns slice of internal item buffer of given outstanding batch.
+    pub fn get(&self, key: &K) -> Option<&[I]> {
+        self.outstanding.get(key).map(|batch| batch.items.as_slice())
+    }
+
+    /// Drops cached batch buffers.
     pub fn clear_cache(&mut self) {
         self.cache.clear();
     }
 
-    /// Poll for outstanding batches that reached duration limit.
+    /// Polls for outstanding batches that reached any limit.
     fn poll(&self) -> PollResult<K> {
         // Check oldest full batch first to make sure that following call to append won't fail
         if let Some(key) = &self.full {
@@ -141,7 +168,7 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         return PollResult::NotReady(None)
     }
 
-    /// Append next item to batch with given stream key.
+    /// Appends next item to batch with given stream key.
     ///
     /// Returns `PollResult::Ready(K, Drain<I>)` where `K` is key of ready batch and `I`
     /// are the items in the batch.
