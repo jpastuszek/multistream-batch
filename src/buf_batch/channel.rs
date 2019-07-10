@@ -26,8 +26,8 @@ pub struct BufBatchChannel<I: Debug> {
 impl<I: Debug> BufBatchChannel<I> {
     /// Creates batch given maximum batch size in number of items (`max_size`)
     /// and maximum duration that batch can last (`max_duration`) since first item appended to it. 
-    pub fn new(max_size: usize, max_duration: Duration) -> (Sender<Command<I>>, BufBatchChannel<I>) {
-        let (sender, receiver) = crossbeam_channel::bounded(max_size * 2);
+    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<I>>, BufBatchChannel<I>) {
+        let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
         (sender, BufBatchChannel {
             channel: receiver,
@@ -37,8 +37,8 @@ impl<I: Debug> BufBatchChannel<I> {
     }
 
     /// Crates batch calling `producer` closure with `Sender` end of the channel in newly started thread.
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, producer: impl Fn(Sender<Command<I>>) -> () + Send + 'static) -> BufBatchChannel<I> where I: Send + 'static {
-        let (sender, batch) = BufBatchChannel::new(max_size, max_duration);
+    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl Fn(Sender<Command<I>>) -> () + Send + 'static) -> BufBatchChannel<I> where I: Send + 'static {
+        let (sender, batch) = BufBatchChannel::new(max_size, max_duration, channel_size);
 
         std::thread::spawn(move || {
             producer(sender)
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_batch_max_size() {
-        let (sender, mut batch) = BufBatchChannel::new(2, Duration::from_secs(10));
+        let (sender, mut batch) = BufBatchChannel::new(2, Duration::from_secs(10), 10);
 
         sender.send(Command::Append(1)).unwrap();
         sender.send(Command::Append(2)).unwrap();
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn test_batch_with_producer_thread() {
-        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), |sender| {
+        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
             sender.send(Command::Append(1)).unwrap();
             sender.send(Command::Append(2)).unwrap();
             sender.send(Command::Append(3)).unwrap();
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_batch_max_duration() {
-        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_millis(100), |sender| {
+        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_millis(100), 10, |sender| {
             sender.send(Command::Append(1)).unwrap();
             std::thread::sleep(Duration::from_millis(500));
         });
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_batch_disconnected() {
-        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), |sender| {
+        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
             sender.send(Command::Append(1)).unwrap();
         });
 
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_batch_command_complete() {
-        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), |sender| {
+        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
             sender.send(Command::Append(1)).unwrap();
             sender.send(Command::Complete).unwrap();
             sender.send(Command::Append(2)).unwrap();
