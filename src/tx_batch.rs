@@ -1,12 +1,43 @@
 //! `TxBatch` allows for batching incoming stream of items based on batch maximum size or maximum
 //! duration since first item received. It also buffers the items so that current batch can be
 //! processed again for example in case of downstream transaction failure.
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
 use crate::EndOfStreamError;
-use crate::buf_batch::{BatchResult, Take, BufBatchChannel, Command};
+use crate::buf_batch::{BufBatch, PollResult};
 
 use std::fmt::Debug;
 use std::time::Duration;
+use std::vec::Drain;
+
+/// Commands that can be send to `TxBatch` via `Sender` endpoint.
+#[derive(Debug)]
+pub enum Command<I: Debug> {
+    /// Append item `I` to batch.
+    Append(I),
+    /// Flush outstanding items.
+    Complete,
+}
+
+/// Provides actions that can be taken to consume complete batch.
+#[derive(Debug)]
+pub struct Complete<'i, I: Debug>(&'i mut TxBatch<I>);
+
+impl<'i, I: Debug> Complete<'i, I> {
+    /// Restarts batch making `TxBatch.next()` to iterate already appended items starting from oldest one in current batch.
+    pub fn retry(&mut self) {
+        self.0.retry()
+    }
+
+    /// Commits current batch by dropping all buffered items.
+    pub fn commit(&mut self) {
+        self.0.commit()
+    }
+
+    /// Commits current batch by drainig all buffered items.
+    pub fn drain(&mut self) -> Drain<I> {
+        self.0.drain()
+    }
+}
 
 /// Result of batching operation
 #[derive(Debug)]
@@ -14,7 +45,7 @@ pub enum TxBatchResult<'i, I: Debug> {
     /// New item appended to batch
     Item(&'i I),
     /// Batch is now complete
-    Complete,
+    Complete(Complete<'i, I>),
 }
 
 /// Collect items into batches while simultaniously processing them in a transaction (e.g. insert into DB). 
@@ -24,19 +55,25 @@ pub enum TxBatchResult<'i, I: Debug> {
 /// In case transaction failed (e.g. due to confilct) batch can be retried with `self.retry()` in new transaction.
 #[derive(Debug)]
 pub struct TxBatch<I: Debug> {
-    batch: BufBatchChannel<I>,
+    channel: Receiver<Command<I>>,
+    batch: BufBatch<I>,
     // Retry uncommited number of messages before fetching next one/complete
     retry: Option<usize>,
+    // True when channel is disconnected
+    disconnected: bool,
 }
 
 impl<I: Debug> TxBatch<I> {
     /// Creates batch given maximum batch size in number of items (`max_size`)
     /// and maximum duration that batch can last (`max_duration`) since first item appended to it. 
     pub fn new(max_size: usize, max_duration: Duration) -> (Sender<Command<I>>, TxBatch<I>) {
-        let (sender, buf_batch) = BufBatchChannel::new(max_size, max_duration);
+        let (sender, receiver) = crossbeam_channel::bounded(max_size * 2);
+
         (sender, TxBatch {
-            batch: buf_batch,
+            channel: receiver,
+            batch: BufBatch::new(max_size, max_duration),
             retry: None,
+            disconnected: false,
         })
     }
 
@@ -55,7 +92,7 @@ impl<I: Debug> TxBatch<I> {
     ///
     /// Returns `Ok(TxBatchResult::Item(I))` with next item of the batch.
     ///
-    /// Returns `Ok(TxBatchResult::Complete)` signaling end of batch if:
+    /// Returns `Ok(TxBatchResult::Complete(complete))` signaling end of batch if:
     /// * `max_size` of the batch was reached,
     /// * `max_duration` since first element returned elapsed,
     /// * client sent `Command::Complete`.
@@ -81,10 +118,51 @@ impl<I: Debug> TxBatch<I> {
             return Ok(TxBatchResult::Item(item))
         }
 
-        Ok(match self.batch.next()? {
-            BatchResult::Item(i) => TxBatchResult::Item(i),
-            BatchResult::Complete(_take) => TxBatchResult::Complete,
-        })
+        if self.disconnected {
+            return Err(EndOfStreamError)
+        }
+
+        loop {
+            // Check if we have a ready batch due to any limit or go fetch next item
+            let ready_after = match self.batch.poll() {
+                PollResult::Ready => return Ok(TxBatchResult::Complete(Complete(self))),
+                PollResult::NotReady(ready_after) => ready_after,
+            };
+
+            let recv_result = if let Some(ready_after) = ready_after {
+                match self.channel.recv_timeout(ready_after) {
+                    // We got new item before timeout was reached
+                    Ok(item) => Ok(item),
+                    // A batch should be ready now; try again
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    // Other end gone
+                    Err(RecvTimeoutError::Disconnected) => Err(EndOfStreamError),
+                }
+            } else {
+                // No outstanding batches; wait for first item
+                self.channel.recv().map_err(|_| EndOfStreamError)
+            };
+
+            match recv_result {
+                Ok(Command::Append(item)) => {
+                    let item = self.batch.append(item);
+                    return Ok(TxBatchResult::Item(item))
+                }
+                Ok(Command::Complete) => {
+                    // Mark as complete by producer
+                    return Ok(TxBatchResult::Complete(Complete(self)))
+                },
+                Err(_eos) => {
+                    self.disconnected = true;
+                    return Ok(TxBatchResult::Complete(Complete(self)))
+                }
+            };
+        }
+    }
+
+    /// Checks if previous `self.next()` call found channel to be disconnected.
+    pub fn is_disconnected(&self) -> bool {
+        self.disconnected
     }
 
     /// Restarts batch making `self.next()` to iterate already appended items starting from oldest one in current batch.
@@ -94,12 +172,12 @@ impl<I: Debug> TxBatch<I> {
 
     /// Commits current batch by calling `self.take().clear()`.
     pub fn commit(&mut self) {
-        self.batch.take().clear()
+        self.batch.clear()
     }
 
-    /// Takes the current batch as is.
-    pub fn take(&mut self) -> Take<I> {
-        self.batch.take()
+    /// Consumes batch by draining items from internal buffer.
+    pub fn drain(&mut self) -> Drain<I> {
+        self.batch.drain()
     }
 
     /// Converts into internal item buffer.
@@ -149,9 +227,16 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
-            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
-        ); // max_size
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(mut complete)) => complete.retry()); // max_size
+
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(4)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(mut complete)) => complete.commit()); // max_size
+
+        sender.send(Command::Append(5)).unwrap();
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(5)));
     }
 
     #[test]
@@ -165,7 +250,7 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(_complete)));
 
         batch.commit();
 
@@ -175,8 +260,8 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
-            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [3, 4])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(mut complete)) =>
+            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [3, 4])
         ); // max_size
     }
 
@@ -191,7 +276,7 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(_complete)));
 
         batch.commit();
 
@@ -201,8 +286,8 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
-            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [3, 4])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(mut complete)) =>
+            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [3, 4])
         ); // max_size
     }
 
@@ -214,8 +299,8 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
-            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [1])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(mut complete)) =>
+            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [1])
         ); // max_duration
     }
 
@@ -226,8 +311,8 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
-            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [1])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(mut complete)) =>
+            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [1])
         ); // disconnected
         assert_matches!(batch.next(), Err(EndOfStreamError));
     }
@@ -242,13 +327,13 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(_complete)));
 
         batch.commit();
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
-            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [2])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete(mut complete)) =>
+            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [2])
         ); // command
     }
 }
