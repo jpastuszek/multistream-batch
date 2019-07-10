@@ -25,56 +25,14 @@ impl<I: Debug> BufBatch<I> {
     /// Creates batch given maximum batch size in number of items (`max_size`)
     /// and maximum duration that batch can last (`max_duration`) since first item appended to it. 
     pub fn new(max_size: usize, max_duration: Duration) -> BufBatch<I> {
-        Self::from_vec(max_size, max_duration, Vec::new())
-    }
-
-    /// Creates batch by reusing existing `Vec` to store items.
-    pub fn from_vec(max_size: usize, max_duration: Duration, mut items: Vec<I>) -> BufBatch<I> {
-        // Make sure nothing is left in the buffer
-        items.clear();
-
         assert!(max_size > 0, "BufBatch::new/from_vec bad max_size");
 
         BufBatch {
-            items,
+            items: Vec::new(),
             first_item: None,
             max_size,
             max_duration,
         }
-    }
-
-    /// Starts new batch dropping all buffered items.
-    pub fn clear(&mut self) {
-        self.first_item = None;
-        self.items.clear();
-    }
-
-    /// Consumes batch by copying items to newly allocated `Vec`.
-    pub fn split_off(&mut self) -> Vec<I> {
-        self.first_item = None;
-        self.items.split_off(0)
-    }
-
-    /// Consumes batch by draining items from internal buffer.
-    pub fn drain(&mut self) -> Drain<I> {
-        self.first_item = None;
-        self.items.drain(0..)
-    }
-
-    /// Consumes batch by swapping items buffer with given `Vec` and clear.
-    pub fn swap(&mut self, items: &mut Vec<I>) {
-        std::mem::swap(&mut self.items, items);
-        self.clear();
-    }
-
-    /// Converts into internal item buffer.
-    pub fn into_vec(self) -> Vec<I> {
-        self.items
-    }
-
-    /// Returns slice of internal item buffer.
-    pub fn as_slice(&self) -> &[I] {
-        self.items.as_slice()
     }
 
     /// Checks if batch has reached one of its limits.
@@ -119,6 +77,28 @@ impl<I: Debug> BufBatch<I> {
 
         self.items.push(item);
         self.items.last().unwrap()
+    }
+
+    /// Starts new batch dropping all buffered items.
+    pub fn clear(&mut self) {
+        self.first_item = None;
+        self.items.clear();
+    }
+
+    /// Consumes batch by draining items from internal buffer.
+    pub fn drain(&mut self) -> Drain<I> {
+        self.first_item = None;
+        self.items.drain(0..)
+    }
+
+    /// Converts into internal item buffer.
+    pub fn into_vec(self) -> Vec<I> {
+        self.items
+    }
+
+    /// Returns slice of internal item buffer.
+    pub fn as_slice(&self) -> &[I] {
+        self.items.as_slice()
     }
 }
 

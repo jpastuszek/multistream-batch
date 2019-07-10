@@ -30,6 +30,7 @@ impl<I: Debug> TxBatch<I> {
         })
     }
 
+    /// Crates batch calling `producer` closure with `Sender` end of the channel in newly started thread.
     pub fn with_producer_thread(max_size: usize, max_duration: Duration, producer: impl Fn(Sender<Command<I>>) -> () + Send + 'static) -> TxBatch<I> where I: Send + 'static {
         let (sender, batch) = TxBatch::new(max_size, max_duration);
 
@@ -83,19 +84,9 @@ impl<I: Debug> TxBatch<I> {
         self.batch.clear();
     }
 
-    /// Consumes batch by copying items to newly allocated `Vec`.
-    pub fn split_off(&mut self) -> Vec<I> {
-        self.batch.split_off()
-    }
-
     /// Consumes batch by draining items from internal buffer.
     pub fn drain(&mut self) -> Drain<I> {
         self.batch.drain()
-    }
-
-    /// Consumes batch by swapping items buffer with given `Vec` and clear.
-    pub fn swap(&mut self, items: &mut Vec<I>) {
-        self.batch.swap(items)
     }
 
     /// Converts into internal item buffer.
@@ -145,7 +136,9 @@ mod tests {
         assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        ); // max_size
     }
 
     #[test]
@@ -159,7 +152,9 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
+        ); // max_size
 
         batch.clear();
 
@@ -169,7 +164,9 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3, 4])
+        ); // max_size
     }
 
     #[test]
@@ -183,7 +180,9 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
+        ); // max_size
 
         batch.clear();
 
@@ -193,7 +192,9 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3, 4])
+        ); // max_size
     }
 
     #[test]
@@ -204,7 +205,9 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // max_size
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        ); // max_duration
     }
 
     #[test]
@@ -214,7 +217,9 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // disconnected
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        ); // disconnected
         assert_matches!(batch.next(), Err(EndOfStreamError));
     }
 
@@ -228,11 +233,15 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // Command::Complete
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        ); // command
 
         batch.clear();
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete)); // Command::Complete
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [2])
+        ); // command
     }
 }
