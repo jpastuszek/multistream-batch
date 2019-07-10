@@ -15,13 +15,29 @@ pub enum Command<I: Debug> {
     Complete,
 }
 
+/// Provides actions that can be taken to consume complete batch.
+#[derive(Debug)]
+pub struct Take<'i, I: Debug>(&'i mut BufBatch<I>);
+
+impl<'i, I: Debug> Take<'i, I> {
+    /// Consumes batch by draining items from internal buffer.
+    pub fn drain(&mut self) -> Drain<I> {
+        self.0.drain()
+    }
+
+    /// Starts new batch dropping all buffered items.
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+}
+
 /// Result of batching operation
 #[derive(Debug)]
-pub enum BatchResult<'i, I> {
+pub enum BatchResult<'i, I: Debug> {
     /// New item appended to batch
     Item(&'i I),
     /// Batch is now complete
-    Complete(Drain<'i, I>),
+    Complete(Take<'i, I>),
 }
 
 #[derive(Debug)]
@@ -82,7 +98,7 @@ impl<I: Debug> BufBatchChannel<I> {
         loop {
             // Check if we have a ready batch due to any limit or go fetch next item
             let ready_after = match self.batch.poll() {
-                PollResult::Ready => return Ok(BatchResult::Complete(self.drain())),
+                PollResult::Ready => return Ok(BatchResult::Complete(Take(&mut self.batch))),
                 PollResult::NotReady(ready_after) => ready_after,
             };
 
@@ -107,11 +123,11 @@ impl<I: Debug> BufBatchChannel<I> {
                 }
                 Ok(Command::Complete) => {
                     // Mark as complete by producer
-                    return Ok(BatchResult::Complete(self.drain()))
+                    return Ok(BatchResult::Complete(Take(&mut self.batch)))
                 },
                 Err(_eos) => {
                     self.disconnected = true;
-                    return Ok(BatchResult::Complete(self.drain()))
+                    return Ok(BatchResult::Complete(Take(&mut self.batch)))
                 }
             };
         }
@@ -122,14 +138,9 @@ impl<I: Debug> BufBatchChannel<I> {
         self.disconnected
     }
 
-    /// Starts new batch dropping all buffered items.
-    pub fn clear(&mut self) {
-        self.batch.clear();
-    }
-
-    /// Consumes batch by draining items from internal buffer.
-    pub fn drain(&mut self) -> Drain<I> {
-        self.batch.drain()
+    /// Takes the current batch as is.
+    pub fn take(&mut self) -> Take<I> {
+        Take(&mut self.batch)
     }
 
     /// Converts into internal item buffer.
@@ -160,16 +171,14 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) =>
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2])
         ); // max_size
-
-        batch.clear();
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3, 4])
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) =>
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [3, 4])
         ); // max_size
     }
 
@@ -184,16 +193,14 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) =>
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2])
         ); // max_size
-
-        batch.clear();
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3, 4])
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) =>
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [3, 4])
         ); // max_size
     }
 
@@ -205,8 +212,8 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) =>
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1])
         ); // max_duration
         assert!(!batch.is_disconnected()); // check if Complete result was not because thread has finished
     }
@@ -218,8 +225,8 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) =>
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1])
         ); // disconnected
         assert_matches!(batch.next(), Err(EndOfStreamError));
     }
@@ -234,15 +241,13 @@ mod tests {
         });
 
         assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) =>
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1])
         ); // command
 
-        batch.clear();
-
         assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [2])
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) =>
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [2])
         ); // command
     }
 }

@@ -3,15 +3,25 @@
 //! processed again for example in case of downstream transaction failure.
 use crossbeam_channel::Sender;
 use crate::EndOfStreamError;
-use crate::buf_batch::{BatchResult, BufBatchChannel, Command};
+use crate::buf_batch::{BatchResult, Take, BufBatchChannel, Command};
 
 use std::fmt::Debug;
 use std::time::Duration;
-use std::vec::Drain;
 
-// TODO: impl TxIterator that represents batch; when dropped batch is commited, has retry()
-// function to start iteration from begginging of the batch
+/// Result of batching operation
+#[derive(Debug)]
+pub enum TxBatchResult<'i, I: Debug> {
+    /// New item appended to batch
+    Item(&'i I),
+    /// Batch is now complete
+    Complete,
+}
 
+/// Collect items into batches while simultaniously processing them in a transaction (e.g. insert into DB). 
+/// When batch is complete transaction can be commited (e.g. DB COMMIT).
+/// 
+/// If transaction succeeded batch can be cleared with `self.commit()` and new transaction started.
+/// In case transaction failed (e.g. due to confilct) batch can be retried with `self.retry()` in new transaction.
 #[derive(Debug)]
 pub struct TxBatch<I: Debug> {
     batch: BufBatchChannel<I>,
@@ -43,14 +53,14 @@ impl<I: Debug> TxBatch<I> {
 
     /// Gets next item from the batch.
     ///
-    /// Returns `Ok(BatchResult::Item(I))` with next item of the batch.
+    /// Returns `Ok(TxBatchResult::Item(I))` with next item of the batch.
     ///
-    /// Returns `Ok(BatchResult::Complete)` signaling end of batch if:
+    /// Returns `Ok(TxBatchResult::Complete)` signaling end of batch if:
     /// * `max_size` of the batch was reached,
     /// * `max_duration` since first element returned elapsed,
     /// * client sent `Command::Complete`.
     /// 
-    /// Caller is responsible for calling `retry` or `clear` (or other batch consuming methods) after receiving `BatchResult::Complete`.
+    /// Caller is responsible for calling `retry` or `clear` (or other batch consuming methods) after receiving `TxBatchResult::Complete`.
     ///
     /// This call will block indefinitely waiting for first item of the batch.
     ///
@@ -59,7 +69,7 @@ impl<I: Debug> TxBatch<I> {
     /// with original first item time.
     ///
     /// After calling `clear` this function will behave as if new `Batch` object was crated.
-    pub fn next(&mut self) -> Result<BatchResult<I>, EndOfStreamError> {
+    pub fn next(&mut self) -> Result<TxBatchResult<I>, EndOfStreamError> {
         // Yield internal messages if batch was retried
         if let Some(retry) = self.retry {
             let item = &self.batch.as_slice()[self.batch.as_slice().len() - retry];
@@ -68,10 +78,13 @@ impl<I: Debug> TxBatch<I> {
             } else {
                 self.retry = Some(retry - 1);
             }
-            return Ok(BatchResult::Item(item))
+            return Ok(TxBatchResult::Item(item))
         }
 
-        self.batch.next()
+        Ok(match self.batch.next()? {
+            BatchResult::Item(i) => TxBatchResult::Item(i),
+            BatchResult::Complete(_take) => TxBatchResult::Complete,
+        })
     }
 
     /// Restarts batch making `self.next()` to iterate already appended items starting from oldest one in current batch.
@@ -79,14 +92,14 @@ impl<I: Debug> TxBatch<I> {
         self.retry = Some(self.as_slice().len());
     }
 
-    /// Starts new batch dropping all buffered items.
-    pub fn clear(&mut self) {
-        self.batch.clear();
+    /// Commits current batch by calling `self.take().clear()`.
+    pub fn commit(&mut self) {
+        self.batch.take().clear()
     }
 
-    /// Consumes batch by draining items from internal buffer.
-    pub fn drain(&mut self) -> Drain<I> {
-        self.batch.drain()
+    /// Takes the current batch as is.
+    pub fn take(&mut self) -> Take<I> {
+        self.batch.take()
     }
 
     /// Converts into internal item buffer.
@@ -116,33 +129,33 @@ mod tests {
         sender.send(Command::Append(4)).unwrap();
         sender.send(Command::Append(5)).unwrap();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
 
         batch.retry();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
 
         batch.retry();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
 
         batch.retry();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(4)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
+            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
         ); // max_size
     }
 
     #[test]
-    fn test_batch_clear() {
+    fn test_batch_commit() {
         let (sender, mut batch) = TxBatch::new(2, Duration::from_secs(10));
 
         sender.send(Command::Append(1)).unwrap();
@@ -150,22 +163,20 @@ mod tests {
         sender.send(Command::Append(3)).unwrap();
         sender.send(Command::Append(4)).unwrap();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
-        ); // max_size
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete));
 
-        batch.clear();
+        batch.commit();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
 
         batch.retry();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3, 4])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(4)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
+            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [3, 4])
         ); // max_size
     }
 
@@ -178,22 +189,20 @@ mod tests {
             sender.send(Command::Append(4)).unwrap();
         });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
-        ); // max_size
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete));
 
-        batch.clear();
+        batch.commit();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
 
         batch.retry();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3, 4])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(4)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
+            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [3, 4])
         ); // max_size
     }
 
@@ -204,9 +213,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(500));
         });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
+            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [1])
         ); // max_duration
     }
 
@@ -216,9 +225,9 @@ mod tests {
             sender.send(Command::Append(1)).unwrap();
         });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
+            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [1])
         ); // disconnected
         assert_matches!(batch.next(), Err(EndOfStreamError));
     }
@@ -232,16 +241,14 @@ mod tests {
             sender.send(Command::Complete).unwrap();
         });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
-        ); // command
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete));
 
-        batch.clear();
+        batch.commit();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [2])
+        assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBatchResult::Complete) =>
+            assert_eq!(batch.take().drain().collect::<Vec<_>>().as_slice(), [2])
         ); // command
     }
 }
