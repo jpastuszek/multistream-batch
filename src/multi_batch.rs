@@ -4,9 +4,6 @@ use linked_hash_map::LinkedHashMap;
 use std::hash::Hash;
 use std::vec::Drain;
 
-mod channel;
-pub use channel::*;
-
 /// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
 #[derive(Debug)]
 struct OutstandingBatch<I: Debug> {
@@ -52,7 +49,7 @@ pub enum PollResult<K: Debug> {
 ///
 /// Batch item buffers are cached and reused to avoid allocations.
 #[derive(Debug)]
-pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
+pub struct MultiBatch<K: Debug + Ord + Hash, I: Debug> {
     max_size: usize,
     max_duration: Duration,
     // Cache of empty batch item buffers
@@ -63,14 +60,14 @@ pub struct MultistreamBatch<K: Debug + Ord + Hash, I: Debug> {
     full: Option<K>,
 }
 
-impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
-    /// Crates new `MultistreamBatch` with given maximum size (`max_size`) of batch and maximum duration (`max_duration`) since batch was crated (first item appended) limits.
+impl<K, I> MultiBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
+    /// Crates new `MultiBatch` with given maximum size (`max_size`) of batch and maximum duration (`max_duration`) since batch was crated (first item appended) limits.
     /// 
     /// Panics if `max_size` == 0.
-    pub fn new(max_size: usize, max_duration: Duration) -> MultistreamBatch<K, I> {
-        assert!(max_size > 0, "MultistreamBatch::new bad max_size");
+    pub fn new(max_size: usize, max_duration: Duration) -> MultiBatch<K, I> {
+        assert!(max_size > 0, "MultiBatch::new bad max_size");
 
-        MultistreamBatch {
+        MultiBatch {
             max_size,
             max_duration,
             cache: Default::default(),
@@ -80,7 +77,7 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
     }
 
     /// Polls for outstanding batches that reached any limit.
-    fn poll(&self) -> PollResult<K> {
+    pub fn poll(&self) -> PollResult<K> {
         // Check oldest full batch first to make sure that following call to append won't fail
         if let Some(key) = &self.full {
             return PollResult::Ready(key.clone())
@@ -116,7 +113,7 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         if let Some(batch) = self.outstanding.get_mut(&key) {
             // Reached max_size limit
             if batch.items.len() >= self.max_size {
-                panic!("MultistreamBatch append on full batch");
+                panic!("MultiBatch append on full batch");
             }
 
             batch.items.push(item);
@@ -204,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_batch_poll() {
-        let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
+        let mut batch = MultiBatch::new(4, Duration::from_secs(10));
 
         // empty has no outstanding batches
         assert_matches!(batch.poll(), PollResult::NotReady(None));
@@ -228,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_batch_max_size() {
-        let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
+        let mut batch = MultiBatch::new(4, Duration::from_secs(10));
 
         batch.append(0, 1);
         batch.append(0, 2);
@@ -269,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_batch_max_duration() {
-        let mut batch = MultistreamBatch::new(4, Duration::from_millis(100));
+        let mut batch = MultiBatch::new(4, Duration::from_millis(100));
 
         batch.append(0, 1);
         batch.append(0, 2);
@@ -297,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_drain_stream() {
-        let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
+        let mut batch = MultiBatch::new(4, Duration::from_secs(10));
 
         batch.append(0, 1);
         batch.append(0, 2);
@@ -326,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_flush() {
-        let mut batch = MultistreamBatch::new(4, Duration::from_secs(10));
+        let mut batch = MultiBatch::new(4, Duration::from_secs(10));
 
         batch.append(0, 1);
         batch.append(1, 1);

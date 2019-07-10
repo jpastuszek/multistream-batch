@@ -2,9 +2,6 @@ use std::time::{Duration, Instant};
 use std::fmt::Debug;
 use std::vec::Drain;
 
-mod channel;
-pub use channel::*;
-
 /// Represents result from `poll` and `append` functions where batch is `Ready` to be consumed or `NotReady` yet.
 #[derive(Debug)]
 pub enum PollResult {

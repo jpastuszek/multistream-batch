@@ -1,5 +1,5 @@
 use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
-use crate::EndOfStreamError;
+use crate::channel::EndOfStreamError;
 use crate::buf_batch::{PollResult, BufBatch};
 
 use std::fmt::Debug;

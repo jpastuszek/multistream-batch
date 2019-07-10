@@ -2,7 +2,7 @@
 //! duration since first item received. It also buffers the items so that current batch can be
 //! processed again for example in case of downstream transaction failure.
 use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
-use crate::EndOfStreamError;
+use crate::channel::EndOfStreamError;
 use crate::buf_batch::{BufBatch, PollResult};
 
 use std::fmt::Debug;
