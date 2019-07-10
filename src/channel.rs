@@ -1,6 +1,6 @@
 pub mod buf_batch;
 pub mod multi_buf_batch;
-pub mod tx_batch;
+pub mod tx_buf_batch;
 
 use std::error::Error;
 use std::fmt;
