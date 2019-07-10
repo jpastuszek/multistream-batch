@@ -133,7 +133,7 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
             };
 
             batch.items.push(item);
-            self.outstanding.insert(key.clone(), batch);
+            self.outstanding.insert(key, batch);
         }
     }
 

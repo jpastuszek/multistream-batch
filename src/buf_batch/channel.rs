@@ -101,14 +101,14 @@ impl<I: Debug> BufBatchChannel<I> {
             };
 
             match recv_result {
-                Ok(Command::Append(item)) => {
-                    let item = self.batch.append(item);
-                    return Ok(BatchResult::Item(item))
-                }
                 Ok(Command::Complete) => {
                     // Mark as complete by producer
                     return Ok(BatchResult::Complete(self.batch.drain()))
                 },
+                Ok(Command::Append(item)) => {
+                    let item = self.batch.append(item);
+                    return Ok(BatchResult::Item(item))
+                }
                 Err(_eos) => {
                     self.disconnected = true;
                     return Ok(BatchResult::Complete(self.batch.drain()))
