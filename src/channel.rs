@@ -1,5 +1,5 @@
 pub mod buf_batch;
-pub mod multi_batch;
+pub mod multi_buf_batch;
 pub mod tx_batch;
 
 use std::error::Error;
