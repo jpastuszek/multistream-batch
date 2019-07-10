@@ -233,6 +233,14 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBufBatchResult::Item(2)));
         assert_matches!(batch.next(), Ok(TxBufBatchResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBufBatchResult::Item(4)));
+        assert_matches!(batch.next(), Ok(TxBufBatchResult::Complete(_))); // max_size
+
+        batch.retry();
+
+        assert_matches!(batch.next(), Ok(TxBufBatchResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBufBatchResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBufBatchResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBufBatchResult::Item(4)));
         assert_matches!(batch.next(), Ok(TxBufBatchResult::Complete(mut complete)) => complete.commit()); // max_size
 
         sender.send(Command::Append(5)).unwrap();
