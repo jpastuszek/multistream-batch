@@ -16,11 +16,32 @@ pub enum Command<K: Debug + Ord + Hash, I: Debug> {
     Drain(K),
 }
 
+/// Provides actions that can be taken to consume complete batch.
+#[derive(Debug)]
+pub struct Take<'i, K: Debug + Ord + Hash, I: Debug>(K, &'i mut MultistreamBatch<K, I>);
+
+impl<'i, K: Debug + Ord + Hash + Clone, I: Debug> Take<'i, K, I> {
+    /// Gets key of this batch
+    pub fn key(&self) -> &K {
+        &self.0
+    }
+
+    /// Consumes batch by draining items from internal buffer.
+    pub fn drain(&mut self) -> Drain<I> {
+        self.1.drain(&self.0).unwrap()
+    }
+
+    /// Starts new batch dropping all buffered items.
+    pub fn clear(&mut self) {
+        self.1.clear(&self.0)
+    }
+}
+
 /// Result of batching operation
 #[derive(Debug)]
-pub enum BatchResult<'i, K, I> {
+pub enum BatchResult<'i, K: Debug + Ord + Hash, I: Debug> {
     /// Batch is now complete.
-    Complete(K, Drain<'i, I>),
+    Complete(Take<'i, K, I>),
     /// Work has been done but no bach is ready yet.
     TryAgain,
 }
@@ -35,10 +56,8 @@ pub enum BatchResult<'i, K, I> {
 pub struct MultistreamBatchChannel<K: Debug + Ord + Hash, I: Debug> {
     channel: Receiver<Command<K, I>>,
     batch: MultistreamBatch<K, I>,
-    // When flushing outstanding batches this buffer will contain all the data
-    flush: Option<Vec<(K, Vec<I>)>>,
-    flush_index: usize,
-    // Instant at which a batch would reach its duration limit
+    // When flushing outstanding batches this iterator will yeld keys of outstanding batches to be flushed in order
+    flush: Option<std::vec::IntoIter<K>>,
 }
 
 impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone + 'static, I: Debug + Send + 'static {
@@ -56,7 +75,6 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
             channel: receiver,
             batch: MultistreamBatch::new(max_size, max_duration),
             flush: None,
-            flush_index: 0,
         })
     }
 
@@ -96,26 +114,18 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
     pub fn next<'i>(&'i mut self) -> Result<BatchResult<'i, K, I>, EndOfStreamError> {
         if self.flush.is_some() {
             // Note that I can't use `if let` above or we move mut borrow here
-            let batches = self.flush.as_mut().unwrap();
+            let keys = self.flush.as_mut().unwrap();
 
-            if self.flush_index >= batches.len() {
-                // We are done flushing, free memory and bail
-                batches.clear();
-                return Err(EndOfStreamError);
+            if let Some(key) = keys.next() {
+                let take = self.take(key).expect("flushing key that does not exist");
+                return Ok(BatchResult::Complete(take))
             }
-
-            // Provide next batch from flushed batches
-            let (key, items) = &mut batches[self.flush_index];
-            self.flush_index += 1;
-            return Ok(BatchResult::Complete(key.clone(), items.drain(0..)))
+            return Err(EndOfStreamError);
         }
 
         // Check if we have a ready batch due to any limit or go fetch next item
         let ready_after = match self.batch.poll() {
-            PollResult::Ready(key) => {
-                let drain = self.batch.drain(&key).expect("key ready but drain did not find it");
-                return Ok(BatchResult::Complete(key, drain))
-            }
+            PollResult::Ready(key) => return Ok(BatchResult::Complete(Take(key.clone(), &mut self.batch))),
             PollResult::NotReady(ready_after) => ready_after,
         };
 
@@ -136,41 +146,28 @@ impl<K, I> MultistreamBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Cl
         match recv_result {
             Ok(Command::Drain(key)) => {
                 // Mark as complete by producer
-                if let Some(drain) = self.batch.drain(&key) {
-                    return Ok(BatchResult::Complete(key, drain))
+                if let Some(take) = self.take(key) {
+                    return Ok(BatchResult::Complete(take))
                 }
             },
             Ok(Command::Append(key, item)) => self.batch.append(key, item),
             Err(_eos) => {
                 // Flush batches and free memory
-                let batches = self.batch.flush();
+                let keys = self.batch.outstanding();
                 self.batch.clear_cache();
-                self.flush = Some(batches);
+                self.flush = Some(keys.into_iter());
             }
         }
 
         return Ok(BatchResult::TryAgain)
     }
 
-    /// Starts new batch dropping all buffered items.
-    pub fn clear(&mut self, key: &K) {
-        self.batch.clear(key)
-    }
-
-    /// Consumes batch by copying items to newly allocated `Vec`.
-    pub fn split_off(&mut self, key: &K) -> Option<Vec<I>> {
-        self.batch.split_off(key)
-    }
-
-    /// Consumes batch by draining items from internal buffer.
-    pub fn drain(&mut self, key: &K) -> Option<Drain<I>> {
-        self.batch.drain(key)
-    }
-
-    /// Consumes batch by swapping items buffer with given `Vec` and clear.
-    /// Returns `Ok(())` if successfull.
-    pub fn swap(&mut self, key: &K, buffer: &mut Vec<I>) -> Result<(), ()> {
-        self.batch.swap(key, buffer)
+    /// Takes the current batch as is.
+    pub fn take(&mut self, key: K) -> Option<Take<K, I>> {
+        if self.batch.get(&key).is_none() {
+            return None
+        }
+        Some(Take(key, &mut self.batch))
     }
 
     /// Flushes all outstanding batches starting from oldest.
@@ -211,9 +208,10 @@ mod tests {
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(0, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 0);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        });
 
         sender.send(Append(1, 1)).unwrap();
         sender.send(Append(1, 2)).unwrap();
@@ -228,9 +226,10 @@ mod tests {
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(1, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 1);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4])
+        });
 
         sender.send(Append(1, 6)).unwrap();
         sender.send(Append(0, 6)).unwrap();
@@ -247,15 +246,17 @@ mod tests {
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(1, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 1);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
+        });
 
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(0, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 0);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [5, 6, 7, 8])
+        });
     }
 
     #[test]
@@ -272,15 +273,17 @@ mod tests {
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(0, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 0);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2])
+        });
 
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(1, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 1);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2])
+        });
     }
 
     #[test]
@@ -293,9 +296,10 @@ mod tests {
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // timeout
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(0, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 0);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1])
+        });
     }
 
     #[test]
@@ -315,28 +319,32 @@ mod tests {
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(0, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 0);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2])
+        });
 
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(1, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 1);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2])
+        });
 
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
 
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // EndOfStreamError will flush
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(0, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 0);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [3])
+        });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(1, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 1);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [3])
+        });
 
         assert_matches!(batch.next(), Err(EndOfStreamError));
     }
@@ -357,27 +365,31 @@ mod tests {
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(0, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 0);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1])
+        });
 
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(1, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 1);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [1, 2])
+        });
 
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain)); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(0, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [2, 3])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 0);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [2, 3])
+        });
 
         assert_matches!(batch.next(), Ok(BatchResult::TryAgain));
 
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(1, drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3])
-        );
+        assert_matches!(batch.next(), Ok(BatchResult::Complete(mut take)) => {
+            assert_eq!(*take.key(), 1);
+            assert_eq!(take.drain().collect::<Vec<_>>().as_slice(), [3])
+        });
     }
 }

@@ -79,74 +79,6 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         }
     }
 
-    /// Moves outstanding batch item buffor to cache and returns its `&mut` reference.
-    fn move_to_cache(&mut self, key: &K) -> Option<&mut Vec<I>> {
-        // If consuming full key clear it
-        if self.full.as_ref().filter(|fkey| *fkey == key).is_some() {
-            self.full.take();
-        }
-
-        // Move items from outstanding to cache
-        let items = self.outstanding.remove(key)?.items;
-        self.cache.push(items);
-        self.cache.last_mut()
-    }
-
-    /// Starts new batch dropping all buffered items.
-    pub fn clear(&mut self, key: &K) {
-        self.move_to_cache(key).map(|items| items.clear());
-    }
-
-    /// Consumes batch by copying items to newly allocated `Vec`.
-    pub fn split_off(&mut self, key: &K) -> Option<Vec<I>> {
-        self.move_to_cache(key).map(|items| items.split_off(0))
-    }
-
-    /// Consumes batch by draining items from internal buffer.
-    pub fn drain(&mut self, key: &K) -> Option<Drain<I>> {
-        self.move_to_cache(key).map(|items| items.drain(0..))
-    }
-
-    /// Consumes batch by swapping items buffer with given `Vec` and clear.
-    /// Returns `Ok(())` if successfull.
-    pub fn swap(&mut self, key: &K, buffer: &mut Vec<I>) -> Result<(), ()> {
-        self.move_to_cache(key).map(|items| {
-            buffer.clear();
-            std::mem::swap(items, buffer);
-            ()
-        }).ok_or(())
-    }
-
-    /// Flushes all outstanding batches starting from oldest.
-    pub fn flush(&mut self) -> Vec<(K, Vec<I>)> {
-        let cache = &mut self.cache;
-        let outstanding = &mut self.outstanding;
-
-        outstanding.entries().map(|entry| {
-            let key = entry.key().clone();
-
-            // Move to cache
-            let items = entry.remove().items;
-            cache.push(items);
-            let items = cache.last_mut().unwrap();
-
-            // Move items out preserving capacity
-            let items = items.split_off(0);
-
-            (key, items)
-        }).collect()
-    }
-
-    /// Returns slice of internal item buffer of given outstanding batch.
-    pub fn get(&self, key: &K) -> Option<&[I]> {
-        self.outstanding.get(key).map(|batch| batch.items.as_slice())
-    }
-
-    /// Drops cached batch buffers.
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
-    }
-
     /// Polls for outstanding batches that reached any limit.
     fn poll(&self) -> PollResult<K> {
         // Check oldest full batch first to make sure that following call to append won't fail
@@ -203,6 +135,64 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
             batch.items.push(item);
             self.outstanding.insert(key.clone(), batch);
         }
+    }
+
+    /// Moves outstanding batch item buffor to cache and returns its `&mut` reference.
+    fn move_to_cache(&mut self, key: &K) -> Option<&mut Vec<I>> {
+        // If consuming full key clear it
+        if self.full.as_ref().filter(|fkey| *fkey == key).is_some() {
+            self.full.take();
+        }
+
+        // Move items from outstanding to cache
+        let items = self.outstanding.remove(key)?.items;
+        self.cache.push(items);
+        self.cache.last_mut()
+    }
+
+    /// Starts new batch dropping all buffered items.
+    pub fn clear(&mut self, key: &K) {
+        self.move_to_cache(key).map(|items| items.clear());
+    }
+
+    /// Consumes batch by draining items from internal buffer.
+    pub fn drain(&mut self, key: &K) -> Option<Drain<I>> {
+        self.move_to_cache(key).map(|items| items.drain(0..))
+    }
+
+    /// Collects a list of keys of outstanding batches.
+    pub fn outstanding(&self) -> Vec<K> {
+        self.outstanding.keys().cloned().collect()
+    }
+
+    /// Flushes all outstanding batches starting from oldest.
+    pub fn flush(&mut self) -> Vec<(K, Vec<I>)> {
+        let cache = &mut self.cache;
+        let outstanding = &mut self.outstanding;
+
+        outstanding.entries().map(|entry| {
+            let key = entry.key().clone();
+
+            // Move to cache
+            let items = entry.remove().items;
+            cache.push(items);
+            let items = cache.last_mut().unwrap();
+
+            // Move items out preserving capacity
+            let items = items.split_off(0);
+
+            (key, items)
+        }).collect()
+    }
+
+    /// Returns slice of internal item buffer of given outstanding batch.
+    pub fn get(&self, key: &K) -> Option<&[I]> {
+        self.outstanding.get(key).map(|batch| batch.items.as_slice())
+    }
+
+    /// Drops cached batch buffers.
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
     }
 }
 
