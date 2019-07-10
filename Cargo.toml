@@ -4,8 +4,11 @@ version = "0.1.0"
 authors = ["Jakub Pastuszek <jpastuszek@gmail.com>"]
 edition = "2018"
 
+[features]
+default = ["crossbeam-channel"]
+
 [dependencies]
-crossbeam-channel = "0.3.8"
+crossbeam-channel = { version = "0.3.8", optional = true }
 linked-hash-map = "0.5.2"
 
 [dev-dependencies]
