@@ -15,15 +15,6 @@ pub enum Command<I: Debug> {
     Complete,
 }
 
-/// Result of batching operation
-#[derive(Debug)]
-pub enum BatchResult<'i, I: Debug> {
-    /// New item appended to batch
-    Item(&'i I),
-    /// Batch is now complete
-    Complete(Drain<'i, I>),
-}
-
 #[derive(Debug)]
 pub struct BufBatchChannel<I: Debug> {
     channel: Receiver<Command<I>>,
@@ -74,7 +65,7 @@ impl<I: Debug> BufBatchChannel<I> {
     /// with original first item time.
     ///
     /// After calling `clear` this function will behave as if new `Batch` object was started.
-    pub fn next(&mut self) -> Result<BatchResult<I>, EndOfStreamError> {
+    pub fn next(&mut self) -> Result<Drain<I>, EndOfStreamError> {
         if self.disconnected {
             return Err(EndOfStreamError)
         }
@@ -82,7 +73,7 @@ impl<I: Debug> BufBatchChannel<I> {
         loop {
             // Check if we have a ready batch due to any limit or go fetch next item
             let ready_after = match self.batch.poll() {
-                PollResult::Ready => return Ok(BatchResult::Complete(self.batch.drain())),
+                PollResult::Ready => return Ok(self.batch.drain()),
                 PollResult::NotReady(ready_after) => ready_after,
             };
 
@@ -103,15 +94,15 @@ impl<I: Debug> BufBatchChannel<I> {
             match recv_result {
                 Ok(Command::Complete) => {
                     // Mark as complete by producer
-                    return Ok(BatchResult::Complete(self.batch.drain()))
+                    return Ok(self.batch.drain())
                 },
                 Ok(Command::Append(item)) => {
-                    let item = self.batch.append(item);
-                    return Ok(BatchResult::Item(item))
+                    self.batch.append(item);
+                    continue
                 }
                 Err(_eos) => {
                     self.disconnected = true;
-                    return Ok(BatchResult::Complete(self.batch.drain()))
+                    return Ok(self.batch.drain())
                 }
             };
         }
@@ -150,21 +141,15 @@ mod tests {
     use assert_matches::assert_matches;
 
     #[test]
-    fn test_batch_restart() {
+    fn test_batch_max_size() {
         let (sender, mut batch) = BufBatchChannel::new(2, Duration::from_secs(10));
 
         sender.send(Command::Append(1)).unwrap();
         sender.send(Command::Append(2)).unwrap();
         sender.send(Command::Append(3)).unwrap();
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-
-        batch.clear();
-
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
-            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [2, 3])
+        assert_matches!(batch.next(), Ok(drain) =>
+            assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
         ); // max_size
     }
 
@@ -177,15 +162,11 @@ mod tests {
             sender.send(Command::Append(4)).unwrap();
         });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+        assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
         ); // max_size
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(3)));
-        assert_matches!(batch.next(), Ok(BatchResult::Item(4)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+        assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [3, 4])
         ); // max_size
     }
@@ -197,8 +178,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(500));
         });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+        assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
         ); // max_duration
         assert!(!batch.is_disconnected()); // check if Complete result was not because thread has finished
@@ -210,8 +190,7 @@ mod tests {
             sender.send(Command::Append(1)).unwrap();
         });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+        assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
         ); // disconnected
         assert_matches!(batch.next(), Err(EndOfStreamError));
@@ -226,13 +205,11 @@ mod tests {
             sender.send(Command::Complete).unwrap();
         });
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(1)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+        assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
         ); // command
 
-        assert_matches!(batch.next(), Ok(BatchResult::Item(2)));
-        assert_matches!(batch.next(), Ok(BatchResult::Complete(drain)) =>
+        assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [2])
         ); // command
     }
