@@ -12,15 +12,15 @@ use std::vec::Drain;
 pub enum Command<K: Debug + Ord + Hash, I: Debug> {
     /// Append item `I` to batch for stream with key `K`.
     Append(K, I),
-    /// Drain outstanding items from stream `K`.
-    Drain(K),
+    /// Flush outstanding items from stream `K`.
+    Flush(K),
 }
 
 /// Collect items into multiple batches based on stream key.
 /// This implementation uses `crossbeam` channel to implement timeouts on batch duration limit.
 /// 
 /// Batches have maximum size and maximum duration (since first item received) limits set and when reached that batch will be flushed.
-/// Batches can also be manually flushed by sending `Command::Drain(K)` message.
+/// Batches can also be manually flushed by sending `Command::Flush(K)` message.
 /// 
 #[derive(Debug)]
 pub struct MultBufBatchChannel<K: Debug + Ord + Hash, I: Debug> {
@@ -108,7 +108,7 @@ impl<K, I> MultBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone 
             };
 
             match recv_result {
-                Ok(Command::Drain(key)) => {
+                Ok(Command::Flush(key)) => {
                     // Mark as complete by producer
                     if self.batch.get(&key).is_some() { // TODO: can't do &mut call here without polonius
                         let batch = self.batch.drain(&key).unwrap();
@@ -282,12 +282,12 @@ mod tests {
 
         sender.send(Append(0, 1)).unwrap();
         sender.send(Append(1, 1)).unwrap();
-        sender.send(Drain(0)).unwrap();
+        sender.send(Flush(0)).unwrap();
         sender.send(Append(0, 2)).unwrap();
         sender.send(Append(1, 2)).unwrap();
         sender.send(Append(0, 3)).unwrap();
         sender.send(Append(1, 3)).unwrap();
-        sender.send(Drain(1)).unwrap();
+        sender.send(Flush(1)).unwrap();
 
         assert_matches!(batch.next(), Ok((0, drain)) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])

@@ -12,7 +12,7 @@ pub enum Command<I: Debug> {
     /// Append item `I` to batch.
     Append(I),
     /// Flush outstanding items.
-    Complete,
+    Flush,
 }
 
 #[derive(Debug)]
@@ -51,10 +51,10 @@ impl<I: Debug> BufBatchChannel<I> {
     ///
     /// Returns `Ok(BatchResult::Item(I))` with next item of the batch.
     ///
-    /// Returns `Ok(BatchResult::Complete)` signaling end of batch if:
+    /// Returns `Ok(BatchResult::Flush)` signaling end of batch if:
     /// * `max_size` of the batch was reached,
     /// * `max_duration` since first element returned elapsed,
-    /// * client sent `Command::Complete`.
+    /// * client sent `Command::Flush`.
     /// 
     /// Caller is responsible for consuming the batch via provided methods or calling `clear()`.
     ///
@@ -92,7 +92,7 @@ impl<I: Debug> BufBatchChannel<I> {
             };
 
             match recv_result {
-                Ok(Command::Complete) => {
+                Ok(Command::Flush) => {
                     // Mark as complete by producer
                     return Ok(self.batch.drain())
                 },
@@ -181,7 +181,7 @@ mod tests {
         assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
         ); // max_duration
-        assert!(!batch.is_disconnected()); // check if Complete result was not because thread has finished
+        assert!(!batch.is_disconnected()); // check if Flush result was not because thread has finished
     }
 
     #[test]
@@ -200,9 +200,9 @@ mod tests {
     fn test_batch_command_complete() {
         let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
             sender.send(Command::Append(1)).unwrap();
-            sender.send(Command::Complete).unwrap();
+            sender.send(Command::Flush).unwrap();
             sender.send(Command::Append(2)).unwrap();
-            sender.send(Command::Complete).unwrap();
+            sender.send(Command::Flush).unwrap();
         });
 
         assert_matches!(batch.next(), Ok(drain) =>

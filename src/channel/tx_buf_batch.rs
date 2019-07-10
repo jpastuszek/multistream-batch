@@ -15,7 +15,7 @@ pub enum Command<I: Debug> {
     /// Append item `I` to batch.
     Append(I),
     /// Flush outstanding items.
-    Complete,
+    Flush,
 }
 
 /// Provides actions that can be taken to consume complete batch.
@@ -95,7 +95,7 @@ impl<I: Debug> TxBufBatch<I> {
     /// Returns `Ok(TxBufBatchResult::Complete(complete))` signaling end of batch if:
     /// * `max_size` of the batch was reached,
     /// * `max_duration` since first element returned elapsed,
-    /// * client sent `Command::Complete`.
+    /// * client sent `Command::Flush`.
     /// 
     /// Caller is responsible for calling `retry` or `clear` (or other batch consuming methods) after receiving `TxBufBatchResult::Complete`.
     ///
@@ -148,7 +148,7 @@ impl<I: Debug> TxBufBatch<I> {
                     let item = self.batch.append(item);
                     return Ok(TxBufBatchResult::Item(item))
                 }
-                Ok(Command::Complete) => {
+                Ok(Command::Flush) => {
                     // Mark as complete by producer
                     return Ok(TxBufBatchResult::Complete(Complete(self)))
                 },
@@ -321,9 +321,9 @@ mod tests {
     fn test_batch_command_complete() {
         let mut batch = TxBufBatch::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
             sender.send(Command::Append(1)).unwrap();
-            sender.send(Command::Complete).unwrap();
+            sender.send(Command::Flush).unwrap();
             sender.send(Command::Append(2)).unwrap();
-            sender.send(Command::Complete).unwrap();
+            sender.send(Command::Flush).unwrap();
         });
 
         assert_matches!(batch.next(), Ok(TxBufBatchResult::Item(1)));
