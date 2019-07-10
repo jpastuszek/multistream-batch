@@ -150,6 +150,11 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
         self.cache.last_mut()
     }
 
+    /// List of keys of outstanding batches.
+    pub fn outstanding(&self) -> impl Iterator<Item = &K> {
+        self.outstanding.keys()
+    }
+
     /// Starts new batch dropping all buffered items.
     pub fn clear(&mut self, key: &K) {
         self.move_to_cache(key).map(|items| items.clear());
@@ -158,11 +163,6 @@ impl<K, I> MultistreamBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug 
     /// Consumes batch by draining items from internal buffer.
     pub fn drain(&mut self, key: &K) -> Option<Drain<I>> {
         self.move_to_cache(key).map(|items| items.drain(0..))
-    }
-
-    /// Collects a list of keys of outstanding batches.
-    pub fn outstanding(&self) -> Vec<K> {
-        self.outstanding.keys().cloned().collect()
     }
 
     /// Flushes all outstanding batches starting from oldest.

@@ -30,7 +30,7 @@ impl<'i, I: Debug> Complete<'i, I> {
 
     /// Commits current batch by dropping all buffered items.
     pub fn commit(&mut self) {
-        self.0.commit()
+        self.0.clear()
     }
 
     /// Commits current batch by drainig all buffered items.
@@ -170,12 +170,12 @@ impl<I: Debug> TxBatch<I> {
         self.retry = Some(self.as_slice().len());
     }
 
-    /// Commits current batch by calling `self.take().clear()`.
-    pub fn commit(&mut self) {
+    /// Starts new batch dropping all buffered items.
+    pub fn clear(&mut self) {
         self.batch.clear()
     }
 
-    /// Consumes batch by draining items from internal buffer.
+    /// Starts new batch by draining all buffered items.
     pub fn drain(&mut self) -> Drain<I> {
         self.batch.drain()
     }
@@ -252,7 +252,7 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Complete(_complete)));
 
-        batch.commit();
+        batch.clear();
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
 
@@ -278,7 +278,7 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Complete(_complete)));
 
-        batch.commit();
+        batch.clear();
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(3)));
 
@@ -329,7 +329,7 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Complete(_complete)));
 
-        batch.commit();
+        batch.clear();
 
         assert_matches!(batch.next(), Ok(TxBatchResult::Item(2)));
         assert_matches!(batch.next(), Ok(TxBatchResult::Complete(mut complete)) =>

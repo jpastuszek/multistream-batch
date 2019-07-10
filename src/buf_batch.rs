@@ -85,7 +85,7 @@ impl<I: Debug> BufBatch<I> {
         self.items.clear();
     }
 
-    /// Consumes batch by draining items from internal buffer.
+    /// Starts new batch by draining all buffered items.
     pub fn drain(&mut self) -> Drain<I> {
         self.first_item = None;
         self.items.drain(0..)
