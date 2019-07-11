@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::vec::Drain;
 
-/// Commands that can be send to `MultBufBatchChannel` via `Sender` endpoint.
+/// Commands that can be send to `MultiBufBatchChannel` via `Sender` endpoint.
 #[derive(Debug)]
 pub enum Command<K: Debug + Ord + Hash, I: Debug> {
     /// Append item `I` to batch for stream with key `K`.
@@ -23,37 +23,37 @@ pub enum Command<K: Debug + Ord + Hash, I: Debug> {
 /// Batches can also be manually flushed by sending `Command::Flush(K)` message.
 /// 
 #[derive(Debug)]
-pub struct MultBufBatchChannel<K: Debug + Ord + Hash, I: Debug> {
+pub struct MultiBufBatchChannel<K: Debug + Ord + Hash, I: Debug> {
     channel: Receiver<Command<K, I>>,
     batch: MultBufBatch<K, I>,
     // When flushing outstanding batches this iterator will yeld keys of outstanding batches to be flushed in order
     flush: Option<std::vec::IntoIter<K>>,
 }
 
-impl<K, I> MultBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone + 'static, I: Debug + Send + 'static {
-    /// Creates new instance of `MultBufBatchChannel` given maximum size of any single batch in number of items (`max_size`)
+impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone + 'static, I: Debug + Send + 'static {
+    /// Creates new instance of `MultiBufBatchChannel` given maximum size of any single batch in number of items (`max_size`)
     /// and maximum duration a batch can last (`max_duration`). 
     /// 
     /// Internally bounded `crossbeam` channel is used with `channel_size` capacity.
     /// 
     /// Returns `Sender<Command<K, I>>` side of channel which can be used to send items and flush buffers via `Command` enum 
-    /// and `MultBufBatchChannel` receiver end which can be used to receive flushed batches.
-    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<K, I>>, MultBufBatchChannel<K, I>) {
+    /// and `MultiBufBatchChannel` receiver end which can be used to receive flushed batches.
+    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<K, I>>, MultiBufBatchChannel<K, I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
-        (sender, MultBufBatchChannel {
+        (sender, MultiBufBatchChannel {
             channel: receiver,
             batch: MultBufBatch::new(max_size, max_duration),
             flush: None,
         })
     }
 
-    /// Creates `MultBufBatchChannel` with sender end embedded in newly spawned thread.
+    /// Creates `MultiBufBatchChannel` with sender end embedded in newly spawned thread.
     /// 
     /// `producer` closure will be called in context of newly spawned thread with `Sender<Command<K, I>>` endpoint provided as first argument.
-    /// Returns `MultBufBatchChannel` connected with the sender.
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl Fn(Sender<Command<K, I>>) -> () + Send + 'static) -> MultBufBatchChannel<K, I> {
-        let (sender, batch) = MultBufBatchChannel::new(max_size, max_duration, channel_size);
+    /// Returns `MultiBufBatchChannel` connected with the sender.
+    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl Fn(Sender<Command<K, I>>) -> () + Send + 'static) -> MultiBufBatchChannel<K, I> {
+        let (sender, batch) = MultiBufBatchChannel::new(max_size, max_duration, channel_size);
 
         std::thread::spawn(move || {
             producer(sender)
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_batch_max_size() {
-        let (sender, mut batch) = MultBufBatchChannel::new(4, Duration::from_secs(10), 20);
+        let (sender, mut batch) = MultiBufBatchChannel::new(4, Duration::from_secs(10), 20);
 
         sender.send(Append(0, 1)).unwrap();
         sender.send(Append(0, 2)).unwrap();
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_batch_with_producer_thread() {
-        let mut batch = MultBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 20, |sender| {
+        let mut batch = MultiBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 20, |sender| {
             sender.send(Append(0, 1)).unwrap();
             sender.send(Append(1, 1)).unwrap();
             sender.send(Append(0, 2)).unwrap();
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_batch_max_duration() {
-        let mut batch = MultBufBatchChannel::with_producer_thread(2, Duration::from_millis(100) ,10, |sender| {
+        let mut batch = MultiBufBatchChannel::with_producer_thread(2, Duration::from_millis(100) ,10, |sender| {
             sender.send(Append(0, 1)).unwrap();
             std::thread::sleep(Duration::from_millis(500));
             sender.send(Append(0, 2)).unwrap();
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_batch_disconnected() {
-        let (sender, mut batch) = MultBufBatchChannel::new(2, Duration::from_secs(10), 20);
+        let (sender, mut batch) = MultiBufBatchChannel::new(2, Duration::from_secs(10), 20);
 
         sender.send(Append(0, 1)).unwrap();
         sender.send(Append(1, 1)).unwrap();
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_batch_drain() {
-        let (sender, mut batch) = MultBufBatchChannel::new(2, Duration::from_secs(10), 20);
+        let (sender, mut batch) = MultiBufBatchChannel::new(2, Duration::from_secs(10), 20);
 
         sender.send(Append(0, 1)).unwrap();
         sender.send(Append(1, 1)).unwrap();
