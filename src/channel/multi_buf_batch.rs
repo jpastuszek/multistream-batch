@@ -1,6 +1,7 @@
 use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
 use crate::channel::EndOfStreamError;
 use crate::multi_buf_batch::{MultBufBatch, PollResult};
+pub use crate::multi_buf_batch::Stats;
 
 use std::hash::Hash;
 use std::fmt::Debug;
@@ -159,6 +160,11 @@ impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone
     /// Drops cached batch buffers.
     pub fn clear_cache(&mut self) {
         self.batch.clear_cache()
+    }
+
+    /// Provides usage statistics.
+    pub fn stats(&self) -> Stats {
+        self.batch.stats()
     }
 }
 

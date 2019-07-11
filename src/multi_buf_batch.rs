@@ -41,6 +41,15 @@ pub enum PollResult<K: Debug> {
     NotReady(Option<Duration>),
 }
 
+/// Usage statistics.
+#[derive(Debug)]
+pub struct Stats {
+    /// Number of outstanding batches.
+    outstanding: usize,
+    /// Number of cached buffers (not used by outstanding batches).
+    cached_buffers: usize,
+}
+
 /// Collect items into multiple batches based on stream key. 
 /// This base implementation does not handle actual waiting on batch duration timeouts.
 /// 
@@ -190,6 +199,14 @@ impl<K, I> MultBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
     /// Drops cached batch buffers.
     pub fn clear_cache(&mut self) {
         self.cache.clear();
+    }
+
+    /// Provides usage statistics.
+    pub fn stats(&self) -> Stats {
+        Stats {
+            outstanding: self.outstanding.len(),
+            cached_buffers: self.cache.len(),
+        }
     }
 }
 
