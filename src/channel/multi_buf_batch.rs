@@ -52,7 +52,7 @@ impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone
     /// 
     /// `producer` closure will be called in context of newly spawned thread with `Sender<Command<K, I>>` endpoint provided as first argument.
     /// Returns `MultiBufBatchChannel` connected with the sender.
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl Fn(Sender<Command<K, I>>) -> () + Send + 'static) -> MultiBufBatchChannel<K, I> {
+    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl FnOnce(Sender<Command<K, I>>) -> () + Send + 'static) -> MultiBufBatchChannel<K, I> {
         let (sender, batch) = MultiBufBatchChannel::new(max_size, max_duration, channel_size);
 
         std::thread::spawn(move || {
