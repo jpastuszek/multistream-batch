@@ -45,9 +45,9 @@ pub enum PollResult<K: Debug> {
 #[derive(Debug)]
 pub struct Stats {
     /// Number of outstanding batches.
-    outstanding: usize,
+    pub outstanding: usize,
     /// Number of cached buffers (not used by outstanding batches).
-    cached_buffers: usize,
+    pub cached_buffers: usize,
 }
 
 /// Collect items into multiple batches based on stream key. 
