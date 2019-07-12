@@ -4,15 +4,21 @@ use std::time::{Duration, Instant};
 use std::fmt::Debug;
 use std::vec::Drain;
 
-/// Represents result from `poll` and `append` functions where batch is `Ready` to be consumed or `NotReady` yet.
+/// Represents result from `poll` function call.
 #[derive(Debug)]
 pub enum PollResult {
+    /// Batch is ready after reaching one of the limits.
     Ready,
+    /// Batch has not reached one of its limits yet.
+    /// Provides `Duration` after which `max_duration` limit will be reached if batch has
+    /// at least one item.
     NotReady(Option<Duration>),
 }
 
-/// Batches itmes in iternal buffer up to `max_size` items or until `max_duration` has elapsed
-/// since first item was appeded to the batch.
+/// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
+/// since first item was appended to the batch.
+///
+/// This base implementation does not handle actual waiting on batch duration timeouts.
 #[derive(Debug)]
 pub struct BufBatch<I: Debug> {
     items: Vec<I>,
@@ -24,8 +30,10 @@ pub struct BufBatch<I: Debug> {
 impl<I: Debug> BufBatch<I> {
     /// Creates batch given maximum batch size in number of items (`max_size`)
     /// and maximum duration that batch can last (`max_duration`) since first item appended to it.
+    ///
+    /// Panics if `max_size` == 0.
     pub fn new(max_size: usize, max_duration: Duration) -> BufBatch<I> {
-        assert!(max_size > 0, "BufBatch::new/from_vec bad max_size");
+        assert!(max_size > 0, "BufBatch::new bad max_size");
 
         BufBatch {
             items: Vec::new(),
@@ -67,10 +75,7 @@ impl<I: Debug> BufBatch<I> {
     /// Panics if batch has already reached its `max_size` limit.
     pub fn append(&mut self, item: I) -> &I {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
-
-        if self.items.len() >= self.max_size {
-            panic!("BufBatch append on full batch");
-        }
+        assert!(self.items.len() < self.max_size, "BufBatch::append on full batch");
 
         // Count `max_duration` from first item inserted
         self.first_item.get_or_insert_with(|| Instant::now());

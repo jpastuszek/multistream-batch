@@ -1,5 +1,5 @@
-//! This module provides `MultiBufBatch` that will buffer items until batch is ready and provide them in
-//! one go using `Drain` iterator.
+//! This module provides `MultiBufBatch` that will buffer items into multiple internal batches based on key until
+//! one of the batches is ready and provide this items in one go along with the batch key using `Drain` iterator.
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use linked_hash_map::LinkedHashMap;
@@ -32,14 +32,14 @@ impl<I: Debug> OutstandingBatch<I> {
     }
 }
 
-/// Represents result from `poll` and `append` functions where batch is `Ready` to be consumed or `NotReady` yet.
+/// Represents result from `poll` function call.
 #[derive(Debug)]
 pub enum PollResult<K: Debug> {
-    /// Batch is complete after reaching one of the limits.
+    /// Batch `K` is ready after reaching one of the limits.
     Ready(K),
-    /// No outstanding batch reached a limit.
-    /// Provides optional `Duration` after which `max_duration` limit will be reached
-    /// if there is an outstanding batches.
+    /// No outstanding batch has not reached one of its limits yet.
+    /// Provides `Duration` after which `max_duration` limit will be reached
+    /// if there is at least one outstanding batch.
     NotReady(Option<Duration>),
 }
 
@@ -52,13 +52,13 @@ pub struct Stats {
     pub cached_buffers: usize,
 }
 
-/// Collect items into multiple batches based on stream key.
-/// This base implementation does not handle actual waiting on batch duration timeouts.
-///
-/// When a batch limit is reached iterator draining the batch items is provided.
-/// Batch given by stream key can also be manually flushed.
+/// Collects items into multiple batches based on stream key.
+/// A batch may become ready after collecting `max_size` number of items or until `max_duration` has elapsed
+/// since first item was appended to the batch.
 ///
 /// Batch item buffers are cached and reused to avoid allocations.
+///
+/// This base implementation does not handle actual waiting on batch duration timeouts.
 #[derive(Debug)]
 pub struct MultiBufBatch<K: Debug + Ord + Hash, I: Debug> {
     max_size: usize,
@@ -72,7 +72,8 @@ pub struct MultiBufBatch<K: Debug + Ord + Hash, I: Debug> {
 }
 
 impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
-    /// Crates new `MultiBufBatch` with given maximum size (`max_size`) of batch and maximum duration (`max_duration`) since batch was crated (first item appended) limits.
+    /// Crates new instance with given maximum batch size (`max_size`) and maximum duration (`max_duration`) that
+    /// batch can last since first item appended to it.
     ///
     /// Panics if `max_size` == 0.
     pub fn new(max_size: usize, max_duration: Duration) -> MultiBufBatch<K, I> {
@@ -87,7 +88,12 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
         }
     }
 
-    /// Polls for outstanding batches that reached any limit.
+    /// Checks if batch has reached one of its limits.
+    ///
+    /// Returns:
+    /// * `PollResult::Ready(K)` - batch for stream key `K` has reached one of its limit and is ready to be consumed,
+    /// * `PollNotReady(None)` - batch is not ready yet and has not received its first item yet,
+    /// * `PollNotReady(Some(duration))` - batch is not ready yet but it will be ready after duration due to duration limit.
     pub fn poll(&self) -> PollResult<K> {
         // Check oldest full batch first to make sure that following call to append won't fail
         if let Some(key) = &self.full {
@@ -108,24 +114,17 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
         return PollResult::NotReady(None)
     }
 
-    /// Appends next item to batch with given stream key.
+    /// Appends item to batch with given stream key.
     ///
-    /// Returns `PollResult::Ready(K, Drain<I>)` where `K` is key of ready batch and `I`
-    /// are the items in the batch.
+    /// It is an contract error to append batch that is ready according to `self.poll()`.
     ///
-    /// Batch will be ready to drain if:
-    /// * `max_size` of the batch was reached,
-    /// * `max_duration` since first element appended elapsed.
-    ///
-    /// Returns `PollResult::NotReady(Option<Duration>)` when no batch has reached a limit with
-    /// optional `Instance` of time at which oldest batch reaches `max_duration` limit.
+    /// Panics if batch has already reached its `max_size` limit.
     pub fn append(&mut self, key: K, item: I) {
+        assert!(self.full.is_none(), "MultiBufBatch::append unconsumed full batch");
+
         // Look up batch in outstanding or crate one using cached or new items buffer
         if let Some(batch) = self.outstanding.get_mut(&key) {
-            // Reached max_size limit
-            if batch.items.len() >= self.max_size {
-                panic!("MultiBufBatch append on full batch");
-            }
+            assert!(batch.items.len() < self.max_size, "MultiBufBatch::append on full batch");
 
             batch.items.push(item);
 
@@ -145,7 +144,7 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
         }
     }
 
-    /// Moves outstanding batch item buffor to cache and returns its `&mut` reference.
+    /// Moves outstanding batch item buffer to cache and returns its `&mut` reference.
     fn move_to_cache(&mut self, key: &K) -> Option<&mut Vec<I>> {
         // If consuming full key clear it
         if self.full.as_ref().filter(|fkey| *fkey == key).is_some() {
@@ -158,7 +157,7 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
         self.cache.last_mut()
     }
 
-    /// List of keys of outstanding batches.
+    /// Lists keys of outstanding batches.
     pub fn outstanding(&self) -> impl Iterator<Item = &K> {
         self.outstanding.keys()
     }
