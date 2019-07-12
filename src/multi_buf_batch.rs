@@ -1,9 +1,9 @@
 //! This module provides `MultiBufBatch` that will buffer items into multiple internal batches based on key until
 //! one of the batches is ready and provide this items in one go along with the batch key using `Drain` iterator.
-use std::fmt::Debug;
-use std::time::{Duration, Instant};
 use linked_hash_map::LinkedHashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
+use std::time::{Duration, Instant};
 use std::vec::Drain;
 
 /// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
@@ -71,7 +71,11 @@ pub struct MultiBufBatch<K: Debug + Ord + Hash, I: Debug> {
     full: Option<K>,
 }
 
-impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
+impl<K, I> MultiBufBatch<K, I>
+where
+    K: Debug + Ord + Hash + Clone,
+    I: Debug,
+{
     /// Crates new instance with given maximum batch size (`max_size`) and maximum duration (`max_duration`) that
     /// batch can last since first item appended to it.
     ///
@@ -97,7 +101,7 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
     pub fn poll(&self) -> PollResult<K> {
         // Check oldest full batch first to make sure that following call to append won't fail
         if let Some(key) = &self.full {
-            return PollResult::Ready(key.clone())
+            return PollResult::Ready(key.clone());
         }
 
         // Check oldest outstanding batch
@@ -105,13 +109,13 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
             let since_start = Instant::now().duration_since(batch.created);
 
             if since_start >= self.max_duration {
-                return PollResult::Ready(key.clone())
+                return PollResult::Ready(key.clone());
             }
 
-            return PollResult::NotReady(Some(self.max_duration - since_start))
+            return PollResult::NotReady(Some(self.max_duration - since_start));
         }
 
-        return PollResult::NotReady(None)
+        return PollResult::NotReady(None);
     }
 
     /// Appends item to batch with given stream key.
@@ -120,11 +124,17 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
     ///
     /// Panics if batch has already reached its `max_size` limit.
     pub fn append(&mut self, key: K, item: I) {
-        assert!(self.full.is_none(), "MultiBufBatch::append unconsumed full batch");
+        assert!(
+            self.full.is_none(),
+            "MultiBufBatch::append unconsumed full batch"
+        );
 
         // Look up batch in outstanding or crate one using cached or new items buffer
         if let Some(batch) = self.outstanding.get_mut(&key) {
-            assert!(batch.items.len() < self.max_size, "MultiBufBatch::append on full batch");
+            assert!(
+                batch.items.len() < self.max_size,
+                "MultiBufBatch::append on full batch"
+            );
 
             batch.items.push(item);
 
@@ -177,24 +187,29 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
         let cache = &mut self.cache;
         let outstanding = &mut self.outstanding;
 
-        outstanding.entries().map(|entry| {
-            let key = entry.key().clone();
+        outstanding
+            .entries()
+            .map(|entry| {
+                let key = entry.key().clone();
 
-            // Move to cache
-            let items = entry.remove().items;
-            cache.push(items);
-            let items = cache.last_mut().unwrap();
+                // Move to cache
+                let items = entry.remove().items;
+                cache.push(items);
+                let items = cache.last_mut().unwrap();
 
-            // Move items out preserving capacity
-            let items = items.split_off(0);
+                // Move items out preserving capacity
+                let items = items.split_off(0);
 
-            (key, items)
-        }).collect()
+                (key, items)
+            })
+            .collect()
     }
 
     /// Returns slice of internal item buffer of given outstanding batch.
     pub fn get(&self, key: &K) -> Option<&[I]> {
-        self.outstanding.get(key).map(|batch| batch.items.as_slice())
+        self.outstanding
+            .get(key)
+            .map(|batch| batch.items.as_slice())
     }
 
     /// Drops cached batch buffers.
@@ -214,8 +229,8 @@ impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
 #[cfg(test)]
 mod tests {
     pub use super::*;
-    use std::time::Duration;
     use assert_matches::assert_matches;
+    use std::time::Duration;
 
     #[test]
     fn test_batch_poll() {

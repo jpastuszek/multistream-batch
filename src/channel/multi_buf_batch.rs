@@ -1,13 +1,13 @@
 //! This module provides `MultiBufBatchChannel` that will buffer items into multiple internal batches based on key until
 //! one of the batches is ready and provide this items in one go along with the batch key using `Drain` iterator.
 //! This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
-use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
 use crate::channel::EndOfStreamError;
-use crate::multi_buf_batch::{MultiBufBatch, PollResult};
 pub use crate::multi_buf_batch::Stats;
+use crate::multi_buf_batch::{MultiBufBatch, PollResult};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
-use std::hash::Hash;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::time::Duration;
 use std::vec::Drain;
 
@@ -35,29 +35,43 @@ pub struct MultiBufBatchChannel<K: Debug + Ord + Hash, I: Debug> {
     flush: Option<std::vec::IntoIter<K>>,
 }
 
-impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone + 'static, I: Debug + Send + 'static {
+impl<K, I> MultiBufBatchChannel<K, I>
+where
+    K: Debug + Ord + Hash + Send + Clone + 'static,
+    I: Debug + Send + 'static,
+{
     /// Crates new instance with given maximum batch size (`max_size`) and maximum duration (`max_duration`) that
     /// batch can last since first item appended to it.
     /// It also returns `Sender` endpoint into which `Command`s can be sent.
     ///
     /// Panics if `max_size` == 0.
-    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<K, I>>, MultiBufBatchChannel<K, I>) {
+    pub fn new(
+        max_size: usize,
+        max_duration: Duration,
+        channel_size: usize,
+    ) -> (Sender<Command<K, I>>, MultiBufBatchChannel<K, I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
-        (sender, MultiBufBatchChannel {
-            channel: receiver,
-            batch: MultiBufBatch::new(max_size, max_duration),
-            flush: None,
-        })
+        (
+            sender,
+            MultiBufBatchChannel {
+                channel: receiver,
+                batch: MultiBufBatch::new(max_size, max_duration),
+                flush: None,
+            },
+        )
     }
 
     /// Crates batch calling `producer` closure with `Sender` end of the channel in newly started thread.
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl FnOnce(Sender<Command<K, I>>) -> () + Send + 'static) -> MultiBufBatchChannel<K, I> {
+    pub fn with_producer_thread(
+        max_size: usize,
+        max_duration: Duration,
+        channel_size: usize,
+        producer: impl FnOnce(Sender<Command<K, I>>) -> () + Send + 'static,
+    ) -> MultiBufBatchChannel<K, I> {
         let (sender, batch) = MultiBufBatchChannel::new(max_size, max_duration, channel_size);
 
-        std::thread::spawn(move || {
-            producer(sender)
-        });
+        std::thread::spawn(move || producer(sender));
 
         batch
     }
@@ -72,12 +86,13 @@ impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone
     /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all outstanding batches were flushed.
     pub fn next<'i>(&'i mut self) -> Result<(K, Drain<I>), EndOfStreamError> {
         loop {
-            if self.flush.is_some() { // TODO: can't do &mut call here whithout polonius
+            if self.flush.is_some() {
+                // TODO: can't do &mut call here whithout polonius
                 let keys = self.flush.as_mut().unwrap();
 
                 if let Some(key) = keys.next() {
                     let batch = self.drain(&key).expect("flushing key that does not exist");
-                    return Ok((key, batch))
+                    return Ok((key, batch));
                 }
                 return Err(EndOfStreamError);
             }
@@ -86,7 +101,7 @@ impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone
             let ready_after = match self.batch.poll() {
                 PollResult::Ready(key) => {
                     let batch = self.batch.drain(&key).expect("ready key not found");
-                    return Ok((key, batch))
+                    return Ok((key, batch));
                 }
                 PollResult::NotReady(ready_after) => ready_after,
             };
@@ -108,22 +123,23 @@ impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone
             match recv_result {
                 Ok(Command::Flush(key)) => {
                     // Mark as complete by producer
-                    if self.batch.get(&key).is_some() { // TODO: can't do &mut call here without polonius
+                    if self.batch.get(&key).is_some() {
+                        // TODO: can't do &mut call here without polonius
                         let batch = self.batch.drain(&key).unwrap();
-                        return Ok((key, batch))
+                        return Ok((key, batch));
                     }
-                    continue
-                },
+                    continue;
+                }
                 Ok(Command::Append(key, item)) => {
                     self.batch.append(key, item);
-                    continue
+                    continue;
                 }
                 Err(_eos) => {
                     // Flush batches and free memory
                     let keys: Vec<K> = self.batch.outstanding().cloned().collect();
                     self.batch.clear_cache();
                     self.flush = Some(keys.into_iter());
-                    continue
+                    continue;
                 }
             }
         }
@@ -167,10 +183,10 @@ impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone
 
 #[cfg(test)]
 mod tests {
-    pub use super::*;
-    use std::time::Duration;
-    use assert_matches::assert_matches;
     use super::Command::*;
+    pub use super::*;
+    use assert_matches::assert_matches;
+    use std::time::Duration;
 
     #[test]
     fn test_batch_max_size() {
@@ -214,12 +230,13 @@ mod tests {
 
     #[test]
     fn test_batch_with_producer_thread() {
-        let mut batch = MultiBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 20, |sender| {
-            sender.send(Append(0, 1)).unwrap();
-            sender.send(Append(1, 1)).unwrap();
-            sender.send(Append(0, 2)).unwrap();
-            sender.send(Append(1, 2)).unwrap();
-        });
+        let mut batch =
+            MultiBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 20, |sender| {
+                sender.send(Append(0, 1)).unwrap();
+                sender.send(Append(1, 1)).unwrap();
+                sender.send(Append(0, 2)).unwrap();
+                sender.send(Append(1, 2)).unwrap();
+            });
 
         assert_matches!(batch.next(), Ok((0, drain)) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
@@ -232,11 +249,16 @@ mod tests {
 
     #[test]
     fn test_batch_max_duration() {
-        let mut batch = MultiBufBatchChannel::with_producer_thread(2, Duration::from_millis(100) ,10, |sender| {
-            sender.send(Append(0, 1)).unwrap();
-            std::thread::sleep(Duration::from_millis(500));
-            sender.send(Append(0, 2)).unwrap();
-        });
+        let mut batch = MultiBufBatchChannel::with_producer_thread(
+            2,
+            Duration::from_millis(100),
+            10,
+            |sender| {
+                sender.send(Append(0, 1)).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+                sender.send(Append(0, 2)).unwrap();
+            },
+        );
 
         assert_matches!(batch.next(), Ok((0, drain)) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])

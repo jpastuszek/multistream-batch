@@ -13,6 +13,6 @@ See sub modules for documentation of available algorithms.
 !*/
 
 pub mod buf_batch;
-pub mod multi_buf_batch;
 #[cfg(feature = "crossbeam-channel")]
 pub mod channel;
+pub mod multi_buf_batch;

@@ -1,9 +1,9 @@
 //! This module provides `BufBatchChannel` that will buffer items until batch is ready and provide them in
 //! one go using `Drain` iterator.
 //! This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
-use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
+use crate::buf_batch::{BufBatch, PollResult};
 use crate::channel::EndOfStreamError;
-use crate::buf_batch::{PollResult, BufBatch};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use std::fmt::Debug;
 use std::time::Duration;
@@ -36,23 +36,36 @@ impl<I: Debug> BufBatchChannel<I> {
     /// It also returns `Sender` endpoint into which `Command`s can be sent.
     ///
     /// Panics if `max_size` == 0.
-    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<I>>, BufBatchChannel<I>) {
+    pub fn new(
+        max_size: usize,
+        max_duration: Duration,
+        channel_size: usize,
+    ) -> (Sender<Command<I>>, BufBatchChannel<I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
-        (sender, BufBatchChannel {
-            channel: receiver,
-            batch: BufBatch::new(max_size, max_duration),
-            disconnected: false,
-        })
+        (
+            sender,
+            BufBatchChannel {
+                channel: receiver,
+                batch: BufBatch::new(max_size, max_duration),
+                disconnected: false,
+            },
+        )
     }
 
     /// Crates batch calling `producer` closure with `Sender` end of the channel in newly started thread.
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl FnOnce(Sender<Command<I>>) -> () + Send + 'static) -> BufBatchChannel<I> where I: Send + 'static {
+    pub fn with_producer_thread(
+        max_size: usize,
+        max_duration: Duration,
+        channel_size: usize,
+        producer: impl FnOnce(Sender<Command<I>>) -> () + Send + 'static,
+    ) -> BufBatchChannel<I>
+    where
+        I: Send + 'static,
+    {
         let (sender, batch) = BufBatchChannel::new(max_size, max_duration, channel_size);
 
-        std::thread::spawn(move || {
-            producer(sender)
-        });
+        std::thread::spawn(move || producer(sender));
 
         batch
     }
@@ -64,7 +77,7 @@ impl<I: Debug> BufBatchChannel<I> {
     /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all batched items were flushed.
     pub fn next(&mut self) -> Result<Drain<I>, EndOfStreamError> {
         if self.disconnected {
-            return Err(EndOfStreamError)
+            return Err(EndOfStreamError);
         }
 
         loop {
@@ -91,15 +104,15 @@ impl<I: Debug> BufBatchChannel<I> {
             match recv_result {
                 Ok(Command::Flush) => {
                     // Mark as complete by producer
-                    return Ok(self.batch.drain())
-                },
+                    return Ok(self.batch.drain());
+                }
                 Ok(Command::Append(item)) => {
                     self.batch.append(item);
-                    continue
+                    continue;
                 }
                 Err(_eos) => {
                     self.disconnected = true;
-                    return Ok(self.batch.drain())
+                    return Ok(self.batch.drain());
                 }
             };
         }
@@ -134,8 +147,8 @@ impl<I: Debug> BufBatchChannel<I> {
 #[cfg(test)]
 mod tests {
     pub use super::*;
-    use std::time::Duration;
     use assert_matches::assert_matches;
+    use std::time::Duration;
 
     #[test]
     fn test_batch_max_size() {
@@ -152,12 +165,13 @@ mod tests {
 
     #[test]
     fn test_batch_with_producer_thread() {
-        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
-            sender.send(Command::Append(1)).unwrap();
-            sender.send(Command::Append(2)).unwrap();
-            sender.send(Command::Append(3)).unwrap();
-            sender.send(Command::Append(4)).unwrap();
-        });
+        let mut batch =
+            BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+                sender.send(Command::Append(2)).unwrap();
+                sender.send(Command::Append(3)).unwrap();
+                sender.send(Command::Append(4)).unwrap();
+            });
 
         assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1, 2])
@@ -170,10 +184,11 @@ mod tests {
 
     #[test]
     fn test_batch_max_duration() {
-        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_millis(100), 10, |sender| {
-            sender.send(Command::Append(1)).unwrap();
-            std::thread::sleep(Duration::from_millis(500));
-        });
+        let mut batch =
+            BufBatchChannel::with_producer_thread(2, Duration::from_millis(100), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+            });
 
         assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
@@ -183,9 +198,10 @@ mod tests {
 
     #[test]
     fn test_batch_disconnected() {
-        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
-            sender.send(Command::Append(1)).unwrap();
-        });
+        let mut batch =
+            BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+            });
 
         assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])
@@ -195,12 +211,13 @@ mod tests {
 
     #[test]
     fn test_batch_command_complete() {
-        let mut batch = BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
-            sender.send(Command::Append(1)).unwrap();
-            sender.send(Command::Flush).unwrap();
-            sender.send(Command::Append(2)).unwrap();
-            sender.send(Command::Flush).unwrap();
-        });
+        let mut batch =
+            BufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+                sender.send(Command::Flush).unwrap();
+                sender.send(Command::Append(2)).unwrap();
+                sender.send(Command::Flush).unwrap();
+            });
 
         assert_matches!(batch.next(), Ok(drain) =>
             assert_eq!(drain.collect::<Vec<_>>().as_slice(), [1])

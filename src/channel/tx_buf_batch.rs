@@ -2,9 +2,9 @@
 //! they are received. The batch will signal when it is ready due to reaching one of its limits at
 //! which point it can be committed or retried.
 //! This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
-use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
-use crate::channel::EndOfStreamError;
 use crate::buf_batch::{BufBatch, PollResult};
+use crate::channel::EndOfStreamError;
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use std::fmt::Debug;
 use std::time::Duration;
@@ -72,24 +72,37 @@ impl<I: Debug> TxBufBatchChannel<I> {
     /// and maximum duration that batch can last (`max_duration`) since first item appended to it.
     ///
     /// Panics if `max_size` == 0.
-    pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<I>>, TxBufBatchChannel<I>) {
+    pub fn new(
+        max_size: usize,
+        max_duration: Duration,
+        channel_size: usize,
+    ) -> (Sender<Command<I>>, TxBufBatchChannel<I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
-        (sender, TxBufBatchChannel {
-            channel: receiver,
-            batch: BufBatch::new(max_size, max_duration),
-            retry: None,
-            disconnected: false,
-        })
+        (
+            sender,
+            TxBufBatchChannel {
+                channel: receiver,
+                batch: BufBatch::new(max_size, max_duration),
+                retry: None,
+                disconnected: false,
+            },
+        )
     }
 
     /// Crates batch calling `producer` closure with `Sender` end of the channel in newly started thread.
-    pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl FnOnce(Sender<Command<I>>) -> () + Send + 'static) -> TxBufBatchChannel<I> where I: Send + 'static {
+    pub fn with_producer_thread(
+        max_size: usize,
+        max_duration: Duration,
+        channel_size: usize,
+        producer: impl FnOnce(Sender<Command<I>>) -> () + Send + 'static,
+    ) -> TxBufBatchChannel<I>
+    where
+        I: Send + 'static,
+    {
         let (sender, batch) = TxBufBatchChannel::new(max_size, max_duration, channel_size);
 
-        std::thread::spawn(move || {
-            producer(sender)
-        });
+        std::thread::spawn(move || producer(sender));
 
         batch
     }
@@ -109,11 +122,11 @@ impl<I: Debug> TxBufBatchChannel<I> {
             } else {
                 self.retry = Some(retry - 1);
             }
-            return Ok(TxBufBatchChannelResult::Item(item))
+            return Ok(TxBufBatchChannelResult::Item(item));
         }
 
         if self.disconnected {
-            return Err(EndOfStreamError)
+            return Err(EndOfStreamError);
         }
 
         loop {
@@ -140,15 +153,15 @@ impl<I: Debug> TxBufBatchChannel<I> {
             match recv_result {
                 Ok(Command::Append(item)) => {
                     let item = self.batch.append(item);
-                    return Ok(TxBufBatchChannelResult::Item(item))
+                    return Ok(TxBufBatchChannelResult::Item(item));
                 }
                 Ok(Command::Flush) => {
                     // Mark as complete by producer
-                    return Ok(TxBufBatchChannelResult::Complete(Complete(self)))
-                },
+                    return Ok(TxBufBatchChannelResult::Complete(Complete(self)));
+                }
                 Err(_eos) => {
                     self.disconnected = true;
-                    return Ok(TxBufBatchChannelResult::Complete(Complete(self)))
+                    return Ok(TxBufBatchChannelResult::Complete(Complete(self)));
                 }
             };
         }
@@ -188,8 +201,8 @@ impl<I: Debug> TxBufBatchChannel<I> {
 #[cfg(test)]
 mod tests {
     pub use super::*;
-    use std::time::Duration;
     use assert_matches::assert_matches;
+    use std::time::Duration;
 
     #[test]
     fn test_batch_retry() {
@@ -252,7 +265,10 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(2)));
-        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(_complete)));
+        assert_matches!(
+            batch.next(),
+            Ok(TxBufBatchChannelResult::Complete(_complete))
+        );
 
         batch.clear();
 
@@ -269,16 +285,20 @@ mod tests {
 
     #[test]
     fn test_batch_with_producer_thread() {
-        let mut batch = TxBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
-            sender.send(Command::Append(1)).unwrap();
-            sender.send(Command::Append(2)).unwrap();
-            sender.send(Command::Append(3)).unwrap();
-            sender.send(Command::Append(4)).unwrap();
-        });
+        let mut batch =
+            TxBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+                sender.send(Command::Append(2)).unwrap();
+                sender.send(Command::Append(3)).unwrap();
+                sender.send(Command::Append(4)).unwrap();
+            });
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(2)));
-        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(_complete)));
+        assert_matches!(
+            batch.next(),
+            Ok(TxBufBatchChannelResult::Complete(_complete))
+        );
 
         batch.clear();
 
@@ -295,10 +315,11 @@ mod tests {
 
     #[test]
     fn test_batch_max_duration() {
-        let mut batch = TxBufBatchChannel::with_producer_thread(2, Duration::from_millis(100), 10, |sender| {
-            sender.send(Command::Append(1)).unwrap();
-            std::thread::sleep(Duration::from_millis(500));
-        });
+        let mut batch =
+            TxBufBatchChannel::with_producer_thread(2, Duration::from_millis(100), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+            });
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(mut complete)) =>
@@ -308,9 +329,10 @@ mod tests {
 
     #[test]
     fn test_batch_disconnected() {
-        let mut batch = TxBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
-            sender.send(Command::Append(1)).unwrap();
-        });
+        let mut batch =
+            TxBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+            });
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(mut complete)) =>
@@ -321,15 +343,19 @@ mod tests {
 
     #[test]
     fn test_batch_command_complete() {
-        let mut batch = TxBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
-            sender.send(Command::Append(1)).unwrap();
-            sender.send(Command::Flush).unwrap();
-            sender.send(Command::Append(2)).unwrap();
-            sender.send(Command::Flush).unwrap();
-        });
+        let mut batch =
+            TxBufBatchChannel::with_producer_thread(2, Duration::from_secs(10), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+                sender.send(Command::Flush).unwrap();
+                sender.send(Command::Append(2)).unwrap();
+                sender.send(Command::Flush).unwrap();
+            });
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
-        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(_complete)));
+        assert_matches!(
+            batch.next(),
+            Ok(TxBufBatchChannelResult::Complete(_complete))
+        );
 
         batch.clear();
 

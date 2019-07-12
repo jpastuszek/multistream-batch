@@ -1,7 +1,7 @@
 //! This module provides `BufBatch` that will buffer items until batch is ready and provide them in
 //! one go using `Drain` iterator.
-use std::time::{Duration, Instant};
 use std::fmt::Debug;
+use std::time::{Duration, Instant};
 use std::vec::Drain;
 
 /// Represents result from `poll` function call.
@@ -53,17 +53,17 @@ impl<I: Debug> BufBatch<I> {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
 
         if self.items.len() >= self.max_size {
-            return PollResult::Ready
+            return PollResult::Ready;
         }
 
         if let Some(first_item) = self.first_item {
             let since_start = Instant::now().duration_since(first_item);
 
             if since_start >= self.max_duration {
-                return PollResult::Ready
+                return PollResult::Ready;
             }
 
-            return PollResult::NotReady(Some(self.max_duration - since_start))
+            return PollResult::NotReady(Some(self.max_duration - since_start));
         }
         PollResult::NotReady(None)
     }
@@ -75,7 +75,10 @@ impl<I: Debug> BufBatch<I> {
     /// Panics if batch has already reached its `max_size` limit.
     pub fn append(&mut self, item: I) -> &I {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
-        assert!(self.items.len() < self.max_size, "BufBatch::append on full batch");
+        assert!(
+            self.items.len() < self.max_size,
+            "BufBatch::append on full batch"
+        );
 
         // Count `max_duration` from first item inserted
         self.first_item.get_or_insert_with(|| Instant::now());
@@ -110,8 +113,8 @@ impl<I: Debug> BufBatch<I> {
 #[cfg(test)]
 mod tests {
     pub use super::*;
-    use std::time::Duration;
     use assert_matches::assert_matches;
+    use std::time::Duration;
 
     #[test]
     fn test_batch_poll() {
