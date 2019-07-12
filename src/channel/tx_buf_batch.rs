@@ -1,6 +1,7 @@
-//! `TxBufBatchChannel` allows for batching incoming stream of items based on batch maximum size or maximum
-//! duration since first item received. It also buffers the items so that current batch can be
-//! processed again for example in case of downstream transaction failure.
+//! This module provides `TxBufBatchChannel` that will produce references to stored items as soon as
+//! they are received. The batch will signal when it is ready due to reaching one of its limits at
+//! which point it can be committed or retried.
+//! This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
 use crate::channel::EndOfStreamError;
 use crate::buf_batch::{BufBatch, PollResult};
@@ -23,7 +24,7 @@ pub enum Command<I: Debug> {
 pub struct Complete<'i, I: Debug>(&'i mut TxBufBatchChannel<I>);
 
 impl<'i, I: Debug> Complete<'i, I> {
-    /// Restarts batch making `TxBufBatchChannel.next()` to iterate already appended items starting from oldest one in current batch.
+    /// Restarts batch making `TxBufBatchChannel.next()` to iterate already received items starting from oldest one in current batch.
     pub fn retry(&mut self) {
         self.0.retry()
     }
@@ -33,13 +34,13 @@ impl<'i, I: Debug> Complete<'i, I> {
         self.0.clear()
     }
 
-    /// Commits current batch by drainig all buffered items.
+    /// Commits current batch by draining all buffered items.
     pub fn drain(&mut self) -> Drain<I> {
         self.0.drain()
     }
 }
 
-/// Result of batching operation
+/// Represents result from `TxBufBatchChannel.next()` function call.
 #[derive(Debug)]
 pub enum TxBufBatchChannelResult<'i, I: Debug> {
     /// New item appended to batch
@@ -48,11 +49,14 @@ pub enum TxBufBatchChannelResult<'i, I: Debug> {
     Complete(Complete<'i, I>),
 }
 
-/// Collect items into batches while simultaniously processing them in a transaction (e.g. insert into DB). 
-/// When batch is complete transaction can be commited (e.g. DB COMMIT).
-/// 
-/// If transaction succeeded batch can be cleared with `self.commit()` and new transaction started.
-/// In case transaction failed (e.g. due to confilct) batch can be retried with `self.retry()` in new transaction.
+/// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
+/// since first item was appended to the batch. Reference to each item is returned for every
+/// received item as soon as they are received.
+///
+/// This batch can provide all the buffered item references in order as they were received again
+/// after batch was completed but retried (not committed).
+///
+/// This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 #[derive(Debug)]
 pub struct TxBufBatchChannel<I: Debug> {
     channel: Receiver<Command<I>>,
@@ -65,7 +69,9 @@ pub struct TxBufBatchChannel<I: Debug> {
 
 impl<I: Debug> TxBufBatchChannel<I> {
     /// Creates batch given maximum batch size in number of items (`max_size`)
-    /// and maximum duration that batch can last (`max_duration`) since first item appended to it. 
+    /// and maximum duration that batch can last (`max_duration`) since first item appended to it.
+    ///
+    /// Panics if `max_size` == 0.
     pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<I>>, TxBufBatchChannel<I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
@@ -88,24 +94,12 @@ impl<I: Debug> TxBufBatchChannel<I> {
         batch
     }
 
-    /// Gets next item from the batch.
+    /// Gets next item reference received by the batch or signal that the batch is now complete and
+    /// can be retried or committed.
     ///
-    /// Returns `Ok(TxBufBatchChannelResult::Item(I))` with next item of the batch.
+    /// This call will block until batch becomes ready.
     ///
-    /// Returns `Ok(TxBufBatchChannelResult::Complete(complete))` signaling end of batch if:
-    /// * `max_size` of the batch was reached,
-    /// * `max_duration` since first element returned elapsed,
-    /// * client sent `Command::Flush`.
-    /// 
-    /// Caller is responsible for calling `retry` or `clear` (or other batch consuming methods) after receiving `TxBufBatchChannelResult::Complete`.
-    ///
-    /// This call will block indefinitely waiting for first item of the batch.
-    ///
-    /// After calling `retry` this method will provide batch items again from the first one. It will
-    /// continue fetching items from producer until max_size or max_duration is reached starting
-    /// with original first item time.
-    ///
-    /// After calling `clear` this function will behave as if new `Batch` object was crated.
+    /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all batched items were flushed.
     pub fn next(&mut self) -> Result<TxBufBatchChannelResult<I>, EndOfStreamError> {
         // Yield internal messages if batch was retried
         if let Some(retry) = self.retry {

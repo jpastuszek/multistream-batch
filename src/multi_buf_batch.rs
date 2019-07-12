@@ -32,7 +32,7 @@ impl<I: Debug> OutstandingBatch<I> {
     }
 }
 
-/// Represents result from `poll` function call.
+/// Represents result from `MultiBufBatch.poll()` function call.
 #[derive(Debug)]
 pub enum PollResult<K: Debug> {
     /// Batch `K` is ready after reaching one of the limits.

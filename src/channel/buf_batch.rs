@@ -1,3 +1,6 @@
+//! This module provides `BufBatchChannel` that will buffer items until batch is ready and provide them in
+//! one go using `Drain` iterator.
+//! This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
 use crate::channel::EndOfStreamError;
 use crate::buf_batch::{PollResult, BufBatch};
@@ -15,17 +18,24 @@ pub enum Command<I: Debug> {
     Flush,
 }
 
+/// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
+/// since first item was appended to the batch.
+///
+/// This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 #[derive(Debug)]
 pub struct BufBatchChannel<I: Debug> {
     channel: Receiver<Command<I>>,
     batch: BufBatch<I>,
-    // True when channel is disconnected
+    // Whenever channel is disconnected
     disconnected: bool,
 }
 
 impl<I: Debug> BufBatchChannel<I> {
     /// Creates batch given maximum batch size in number of items (`max_size`)
-    /// and maximum duration that batch can last (`max_duration`) since first item appended to it. 
+    /// and maximum duration that batch can last (`max_duration`) since first item appended to it.
+    /// It also returns `Sender` endpoint into which `Command`s can be sent.
+    ///
+    /// Panics if `max_size` == 0.
     pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<I>>, BufBatchChannel<I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
@@ -47,24 +57,11 @@ impl<I: Debug> BufBatchChannel<I> {
         batch
     }
 
-    /// Gets next item from the batch.
+    /// Gets next ready batch as `Drain` iterator of its items.
     ///
-    /// Returns `Ok(BatchResult::Item(I))` with next item of the batch.
+    /// This call will block until batch becomes ready.
     ///
-    /// Returns `Ok(BatchResult::Flush)` signaling end of batch if:
-    /// * `max_size` of the batch was reached,
-    /// * `max_duration` since first element returned elapsed,
-    /// * client sent `Command::Flush`.
-    /// 
-    /// Caller is responsible for consuming the batch via provided methods or calling `clear()`.
-    ///
-    /// This call will block indefinitely waiting for first item of the batch.
-    ///
-    /// After calling `retry` this will provide batch items again from the first one. It will
-    /// continue fetching items from producer until max_size or max_duration is reached starting
-    /// with original first item time.
-    ///
-    /// After calling `clear` this function will behave as if new `Batch` object was started.
+    /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all batched items were flushed.
     pub fn next(&mut self) -> Result<Drain<I>, EndOfStreamError> {
         if self.disconnected {
             return Err(EndOfStreamError)
