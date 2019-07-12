@@ -1,5 +1,5 @@
-//! This module provides `MultiBufBatch` that will buffer items into multiple internal batches based on key until
-//! one of the batches is ready and provide this items in one go along with the batch key using `Drain` iterator.
+//! This module provides `MultiBufBatch` that will buffer items into multiple internal batches based on batch stream key until
+//! one of the batches is ready and provides this items in one go along with the batch stream key using `Drain` iterator.
 use linked_hash_map::LinkedHashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -58,7 +58,7 @@ pub struct Stats {
 ///
 /// Batch item buffers are cached and reused to avoid allocations.
 ///
-/// This base implementation does not handle actual waiting on batch duration timeouts.
+/// This base implementation does not handle actual awaiting for batch duration timeout.
 #[derive(Debug)]
 pub struct MultiBufBatch<K: Debug + Ord + Hash, I: Debug> {
     max_size: usize,
@@ -96,8 +96,8 @@ where
     ///
     /// Returns:
     /// * `PollResult::Ready(K)` - batch for stream key `K` has reached one of its limit and is ready to be consumed,
-    /// * `PollNotReady(None)` - batch is not ready yet and has not received its first item yet,
-    /// * `PollNotReady(Some(duration))` - batch is not ready yet but it will be ready after duration due to duration limit.
+    /// * `PollResult::NotReady(None)` - batch is not ready yet and has no items appeded yet,
+    /// * `PollResult::NotReady(Some(duration))` - batch is not ready yet but it will be ready after time duration due to duration limit.
     pub fn poll(&self) -> PollResult<K> {
         // Check oldest full batch first to make sure that following call to append won't fail
         if let Some(key) = &self.full {

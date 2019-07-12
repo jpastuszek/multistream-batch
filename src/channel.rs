@@ -1,4 +1,6 @@
 //! Batch implementations that use channels and threads to support simultaneously receiving items and awaiting on timeouts.
+//!
+//! This implementations are using `crossbeam_channel` to implement awaiting for items or timeout.
 
 pub mod buf_batch;
 pub mod multi_buf_batch;

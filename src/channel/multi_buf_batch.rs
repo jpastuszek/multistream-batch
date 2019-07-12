@@ -1,6 +1,5 @@
-//! This module provides `MultiBufBatchChannel` that will buffer items into multiple internal batches based on key until
-//! one of the batches is ready and provide this items in one go along with the batch key using `Drain` iterator.
-//! This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
+//! This module provides `MultiBufBatchChannel` that will buffer items into multiple internal batches based on batch stream key until
+//! one of the batches is ready and provides this items in one go along with the batch stream key using `Drain` iterator.
 use crate::channel::EndOfStreamError;
 pub use crate::multi_buf_batch::Stats;
 use crate::multi_buf_batch::{MultiBufBatch, PollResult};
@@ -25,8 +24,6 @@ pub enum Command<K: Debug + Ord + Hash, I: Debug> {
 /// since first item was appended to the batch.
 ///
 /// Batch item buffers are cached and reused to avoid allocations.
-///
-/// This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 #[derive(Debug)]
 pub struct MultiBufBatchChannel<K: Debug + Ord + Hash, I: Debug> {
     channel: Receiver<Command<K, I>>,

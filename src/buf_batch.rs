@@ -18,7 +18,7 @@ pub enum PollResult {
 /// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
 /// since first item was appended to the batch.
 ///
-/// This base implementation does not handle actual waiting on batch duration timeouts.
+/// This base implementation does not handle actual awaiting for batch duration timeout.
 #[derive(Debug)]
 pub struct BufBatch<I: Debug> {
     items: Vec<I>,
@@ -47,8 +47,8 @@ impl<I: Debug> BufBatch<I> {
     ///
     /// Returns:
     /// * `PollResult::Ready` - batch has reached one of its limit and is ready to be consumed,
-    /// * `PollNotReady(None)` - batch is not ready yet and has not received its first item yet,
-    /// * `PollNotReady(Some(duration))` - batch is not ready yet but it will be ready after duration due to duration limit.
+    /// * `PollResult::NotReady(None)` - batch is not ready yet and has no items appeded yet,
+    /// * `PollResult::NotReady(Some(duration))` - batch is not ready yet but it will be ready after time duration due to duration limit.
     pub fn poll(&self) -> PollResult {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
 

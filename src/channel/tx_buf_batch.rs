@@ -1,7 +1,6 @@
 //! This module provides `TxBufBatchChannel` that will produce references to stored items as soon as
 //! they are received. The batch will signal when it is ready due to reaching one of its limits at
 //! which point it can be committed or retried.
-//! This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 use crate::buf_batch::{BufBatch, PollResult};
 use crate::channel::EndOfStreamError;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
@@ -55,8 +54,6 @@ pub enum TxBufBatchChannelResult<'i, I: Debug> {
 ///
 /// This batch can provide all the buffered item references in order as they were received again
 /// after batch was completed but retried (not committed).
-///
-/// This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 #[derive(Debug)]
 pub struct TxBufBatchChannel<I: Debug> {
     channel: Receiver<Command<I>>,

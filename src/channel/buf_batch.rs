@@ -1,6 +1,5 @@
-//! This module provides `BufBatchChannel` that will buffer items until batch is ready and provide them in
+//! This module provides `BufBatchChannel` that will buffer items until batch is ready and provides them in
 //! one go using `Drain` iterator.
-//! This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 use crate::buf_batch::{BufBatch, PollResult};
 use crate::channel::EndOfStreamError;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
@@ -20,8 +19,6 @@ pub enum Command<I: Debug> {
 
 /// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
 /// since first item was appended to the batch.
-///
-/// This implementation is using `crossbeam_channel` to implement awaiting for items or timeout.
 #[derive(Debug)]
 pub struct BufBatchChannel<I: Debug> {
     channel: Receiver<Command<I>>,
