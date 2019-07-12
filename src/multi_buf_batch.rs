@@ -1,3 +1,5 @@
+//! This module provides `MultiBufBatch` that will buffer items until batch is ready and provide them in
+//! one go using `Drain` iterator.
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use linked_hash_map::LinkedHashMap;
@@ -35,7 +37,7 @@ impl<I: Debug> OutstandingBatch<I> {
 pub enum PollResult<K: Debug> {
     /// Batch is complete after reaching one of the limits.
     Ready(K),
-    /// No outstanding batch reached a limit. 
+    /// No outstanding batch reached a limit.
     /// Provides optional `Duration` after which `max_duration` limit will be reached
     /// if there is an outstanding batches.
     NotReady(Option<Duration>),
@@ -50,15 +52,15 @@ pub struct Stats {
     pub cached_buffers: usize,
 }
 
-/// Collect items into multiple batches based on stream key. 
+/// Collect items into multiple batches based on stream key.
 /// This base implementation does not handle actual waiting on batch duration timeouts.
-/// 
+///
 /// When a batch limit is reached iterator draining the batch items is provided.
 /// Batch given by stream key can also be manually flushed.
 ///
 /// Batch item buffers are cached and reused to avoid allocations.
 #[derive(Debug)]
-pub struct MultBufBatch<K: Debug + Ord + Hash, I: Debug> {
+pub struct MultiBufBatch<K: Debug + Ord + Hash, I: Debug> {
     max_size: usize,
     max_duration: Duration,
     // Cache of empty batch item buffers
@@ -69,14 +71,14 @@ pub struct MultBufBatch<K: Debug + Ord + Hash, I: Debug> {
     full: Option<K>,
 }
 
-impl<K, I> MultBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
-    /// Crates new `MultBufBatch` with given maximum size (`max_size`) of batch and maximum duration (`max_duration`) since batch was crated (first item appended) limits.
-    /// 
+impl<K, I> MultiBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
+    /// Crates new `MultiBufBatch` with given maximum size (`max_size`) of batch and maximum duration (`max_duration`) since batch was crated (first item appended) limits.
+    ///
     /// Panics if `max_size` == 0.
-    pub fn new(max_size: usize, max_duration: Duration) -> MultBufBatch<K, I> {
-        assert!(max_size > 0, "MultBufBatch::new bad max_size");
+    pub fn new(max_size: usize, max_duration: Duration) -> MultiBufBatch<K, I> {
+        assert!(max_size > 0, "MultiBufBatch::new bad max_size");
 
-        MultBufBatch {
+        MultiBufBatch {
             max_size,
             max_duration,
             cache: Default::default(),
@@ -122,7 +124,7 @@ impl<K, I> MultBufBatch<K, I> where K: Debug + Ord + Hash + Clone, I: Debug {
         if let Some(batch) = self.outstanding.get_mut(&key) {
             // Reached max_size limit
             if batch.items.len() >= self.max_size {
-                panic!("MultBufBatch append on full batch");
+                panic!("MultiBufBatch append on full batch");
             }
 
             batch.items.push(item);
@@ -218,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_batch_poll() {
-        let mut batch = MultBufBatch::new(4, Duration::from_secs(10));
+        let mut batch = MultiBufBatch::new(4, Duration::from_secs(10));
 
         // empty has no outstanding batches
         assert_matches!(batch.poll(), PollResult::NotReady(None));
@@ -242,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_batch_max_size() {
-        let mut batch = MultBufBatch::new(4, Duration::from_secs(10));
+        let mut batch = MultiBufBatch::new(4, Duration::from_secs(10));
 
         batch.append(0, 1);
         batch.append(0, 2);
@@ -283,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_batch_max_duration() {
-        let mut batch = MultBufBatch::new(4, Duration::from_millis(100));
+        let mut batch = MultiBufBatch::new(4, Duration::from_millis(100));
 
         batch.append(0, 1);
         batch.append(0, 2);
@@ -311,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_drain_stream() {
-        let mut batch = MultBufBatch::new(4, Duration::from_secs(10));
+        let mut batch = MultiBufBatch::new(4, Duration::from_secs(10));
 
         batch.append(0, 1);
         batch.append(0, 2);
@@ -340,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_flush() {
-        let mut batch = MultBufBatch::new(4, Duration::from_secs(10));
+        let mut batch = MultiBufBatch::new(4, Duration::from_secs(10));
 
         batch.append(0, 1);
         batch.append(1, 1);

@@ -1,3 +1,5 @@
+//! This module provides `BufBatch` that will buffer items until batch is ready and provide them in
+//! one go using `Drain` iterator.
 use std::time::{Duration, Instant};
 use std::fmt::Debug;
 use std::vec::Drain;
@@ -9,7 +11,8 @@ pub enum PollResult {
     NotReady(Option<Duration>),
 }
 
-/// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
+/// Batches itmes in iternal buffer up to `max_size` items or until `max_duration` has elapsed
+/// since first item was appeded to the batch.
 #[derive(Debug)]
 pub struct BufBatch<I: Debug> {
     items: Vec<I>,
@@ -20,7 +23,7 @@ pub struct BufBatch<I: Debug> {
 
 impl<I: Debug> BufBatch<I> {
     /// Creates batch given maximum batch size in number of items (`max_size`)
-    /// and maximum duration that batch can last (`max_duration`) since first item appended to it. 
+    /// and maximum duration that batch can last (`max_duration`) since first item appended to it.
     pub fn new(max_size: usize, max_duration: Duration) -> BufBatch<I> {
         assert!(max_size > 0, "BufBatch::new/from_vec bad max_size");
 
@@ -33,11 +36,11 @@ impl<I: Debug> BufBatch<I> {
     }
 
     /// Checks if batch has reached one of its limits.
-    /// 
+    ///
     /// Returns:
     /// * `PollResult::Ready` - batch has reached one of its limit and is ready to be consumed,
-    /// * `PollNotReady(Some(duration))` - batch is not ready yet but it will be ready after duration due to duration limit,
-    /// * `PollNotReady(None)` batch is not ready yet and has not received its first item.
+    /// * `PollNotReady(None)` - batch is not ready yet and has not received its first item yet,
+    /// * `PollNotReady(Some(duration))` - batch is not ready yet but it will be ready after duration due to duration limit.
     pub fn poll(&self) -> PollResult {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
 
@@ -58,9 +61,9 @@ impl<I: Debug> BufBatch<I> {
     }
 
     /// Appends item to batch and returns reference to that item.
-    /// 
+    ///
     /// It is an contract error to append batch that is ready according to `self.poll()`.
-    /// 
+    ///
     /// Panics if batch has already reached its `max_size` limit.
     pub fn append(&mut self, item: I) -> &I {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());

@@ -1,6 +1,6 @@
 use crossbeam_channel::{Sender, Receiver, RecvTimeoutError};
 use crate::channel::EndOfStreamError;
-use crate::multi_buf_batch::{MultBufBatch, PollResult};
+use crate::multi_buf_batch::{MultiBufBatch, PollResult};
 pub use crate::multi_buf_batch::Stats;
 
 use std::hash::Hash;
@@ -19,38 +19,38 @@ pub enum Command<K: Debug + Ord + Hash, I: Debug> {
 
 /// Collect items into multiple batches based on stream key.
 /// This implementation uses `crossbeam` channel to implement timeouts on batch duration limit.
-/// 
+///
 /// Batches have maximum size and maximum duration (since first item received) limits set and when reached that batch will be flushed.
 /// Batches can also be manually flushed by sending `Command::Flush(K)` message.
-/// 
+///
 #[derive(Debug)]
 pub struct MultiBufBatchChannel<K: Debug + Ord + Hash, I: Debug> {
     channel: Receiver<Command<K, I>>,
-    batch: MultBufBatch<K, I>,
+    batch: MultiBufBatch<K, I>,
     // When flushing outstanding batches this iterator will yeld keys of outstanding batches to be flushed in order
     flush: Option<std::vec::IntoIter<K>>,
 }
 
 impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone + 'static, I: Debug + Send + 'static {
     /// Creates new instance of `MultiBufBatchChannel` given maximum size of any single batch in number of items (`max_size`)
-    /// and maximum duration a batch can last (`max_duration`). 
-    /// 
+    /// and maximum duration a batch can last (`max_duration`).
+    ///
     /// Internally bounded `crossbeam` channel is used with `channel_size` capacity.
-    /// 
-    /// Returns `Sender<Command<K, I>>` side of channel which can be used to send items and flush buffers via `Command` enum 
+    ///
+    /// Returns `Sender<Command<K, I>>` side of channel which can be used to send items and flush buffers via `Command` enum
     /// and `MultiBufBatchChannel` receiver end which can be used to receive flushed batches.
     pub fn new(max_size: usize, max_duration: Duration, channel_size: usize) -> (Sender<Command<K, I>>, MultiBufBatchChannel<K, I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
         (sender, MultiBufBatchChannel {
             channel: receiver,
-            batch: MultBufBatch::new(max_size, max_duration),
+            batch: MultiBufBatch::new(max_size, max_duration),
             flush: None,
         })
     }
 
     /// Creates `MultiBufBatchChannel` with sender end embedded in newly spawned thread.
-    /// 
+    ///
     /// `producer` closure will be called in context of newly spawned thread with `Sender<Command<K, I>>` endpoint provided as first argument.
     /// Returns `MultiBufBatchChannel` connected with the sender.
     pub fn with_producer_thread(max_size: usize, max_duration: Duration, channel_size: usize, producer: impl FnOnce(Sender<Command<K, I>>) -> () + Send + 'static) -> MultiBufBatchChannel<K, I> {
@@ -63,13 +63,13 @@ impl<K, I> MultiBufBatchChannel<K, I> where K: Debug + Ord + Hash + Send + Clone
         batch
     }
 
-    // Note that some construct here would require polonius support in rustc to be 
+    // Note that some construct here would require polonius support in rustc to be
     // optimal: https://gist.github.com/jpastuszek/559bc637c2715248bac62822a710ad36
 
     /// Gets next batch as pair of key and drain iterator for items.
     ///
     /// This call may block until item is received or batch duration limit was reached.
-    /// It may also return `Ok(BatchResult::TryAgain)` if no batch was ready at this time without blocking. 
+    /// It may also return `Ok(BatchResult::TryAgain)` if no batch was ready at this time without blocking.
     /// In this case client should call `next()` again.
     ///
     /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all outstanding batches were flushed.
