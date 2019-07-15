@@ -1,3 +1,6 @@
+
+[![Documentation](https://docs.rs/multistream-batch/badge.svg)](https://dosc.rs/multistream-batch)
+
 Rust library that provides different types and implementations of batching algorithms.
 
 Batching is based on collecting items and flushing them all together when batch has reached some limit or when manually flushed. This makes all items collected in single batch available at once for further processing (e.g. batch insert into a database).
@@ -8,7 +11,7 @@ This implementations will construct batches based on:
 * calling one of the batch consuming methods,
 * sending flush command between batch items (channel based batches).
 
-See (https://dosc.rs/multistream-batch)[documentation] of available algorithms.
+See [documentation](https://dosc.rs/multistream-batch) of available algorithms.
 
 # Example
 
