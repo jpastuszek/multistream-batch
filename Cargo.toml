@@ -1,7 +1,12 @@
 [package]
 name = "multistream-batch"
 version = "0.1.0"
-authors = ["Jakub Pastuszek <jpastuszek@gmail.com>"]
+authors = ["Jakub Pastuszek <jpastuszek@protonmail.com>"]
+description = "Different types and implementations of batching algorithms."
+readme = "README.md"
+keywords = ["batch", "multiline", "transaction"]
+categories = ["algorithms"]
+license = "MIT"
 edition = "2018"
 
 [features]
