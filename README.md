@@ -1,5 +1,5 @@
 
-[![Documentation](https://docs.rs/multistream-batch/badge.svg)](https://dosc.rs/multistream-batch)
+[![Latest Version]][crates.io] [![Documentation]][docs.rs] ![License]
 
 Rust library that provides different types and implementations of batching algorithms.
 
