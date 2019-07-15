@@ -100,3 +100,9 @@ assert_matches!(batch.next(), Ok((1, drain)) =>
 	assert_eq!(drain.collect::<Vec<_>>().as_slice(), [9, 10])
 );
 ```
+
+[crates.io]: https://crates.io/crates/multistream-batch
+[Latest Version]: https://img.shields.io/crates/v/multistream-batch.svg
+[Documentation]: https://docs.rs/multistream-batch/badge.svg
+[docs.rs]: https://docs.rs/multistream-batch
+[License]: https://img.shields.io/crates/l/multistream-batch.svg
