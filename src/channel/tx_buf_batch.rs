@@ -1,6 +1,88 @@
-//! This module provides `TxBufBatchChannel` that will produce references to stored items as soon as
-//! they are received. The batch will signal when it is ready due to reaching one of its limits at
-//! which point it can be committed or retried.
+/*!
+This module provides `TxBufBatchChannel` that will produce references to stored items as soon as
+they are received. The batch will signal when it is ready due to reaching one of its limits at
+which point it can be committed or retried.
+
+# Example
+
+```rust
+use multistream_batch::channel::tx_buf_batch::TxBufBatchChannel;
+use multistream_batch::channel::tx_buf_batch::Command::*;
+use multistream_batch::channel::tx_buf_batch::TxBufBatchChannelResult::*;
+use std::time::Duration;
+use assert_matches::assert_matches;
+
+// Create producer thread and batcher with maximum size of 4 items and
+// maximum batch duration since first received item of 200 ms.
+let mut batch = TxBufBatchChannel::with_producer_thread(4, Duration::from_millis(200), 10, |sender| {
+    // Send a sequence of `Append` commands with integer item value
+    sender.send(Append(1)).unwrap();
+    sender.send(Append(2)).unwrap();
+    sender.send(Append(3)).unwrap();
+    sender.send(Append(4)).unwrap();
+    // At this point batch should have reached its capacity of 4 items
+
+    // Send some more to buffer up for next batch
+    sender.send(Append(5)).unwrap();
+    sender.send(Append(6)).unwrap();
+
+    // Introduce delay to trigger maximum duration timeout
+    std::thread::sleep(Duration::from_millis(400));
+
+    // Send items that will be flushed by `Flush` command
+    sender.send(Append(7)).unwrap();
+    sender.send(Append(8)).unwrap();
+    // Flush outstanding items
+    sender.send(Flush).unwrap();
+
+    // Last buffered up items will be flushed automatically when this thread exits
+    sender.send(Append(9)).unwrap();
+    sender.send(Append(10)).unwrap();
+    // Exiting closure will shutdown the producer thread
+});
+
+// This batch will provide reference to each stored item as soon as it is sent
+assert_matches!(batch.next(), Ok(Item(1)));
+assert_matches!(batch.next(), Ok(Item(2)));
+assert_matches!(batch.next(), Ok(Item(3)));
+
+// Now will will retry the batch before it is complete
+batch.retry();
+
+// Items are provided again from the oldest one of the batch
+assert_matches!(batch.next(), Ok(Item(1)));
+assert_matches!(batch.next(), Ok(Item(2)));
+assert_matches!(batch.next(), Ok(Item(3)));
+assert_matches!(batch.next(), Ok(Item(4)));
+
+// Batch flushed due to size limit; call `.retry()` once more on the `Complete` result
+assert_matches!(batch.next(), Ok(Complete(mut complete)) => complete.retry());
+
+// Items are provided again from the oldest one of the batch
+assert_matches!(batch.next(), Ok(Item(1)));
+assert_matches!(batch.next(), Ok(Item(2)));
+assert_matches!(batch.next(), Ok(Item(3)));
+assert_matches!(batch.next(), Ok(Item(4)));
+// Batch flushed due to size limit; call `.commit()` on the `Complete` result to start new batch
+assert_matches!(batch.next(), Ok(Complete(mut complete)) => complete.commit());
+
+assert_matches!(batch.next(), Ok(Item(5)));
+assert_matches!(batch.next(), Ok(Item(6)));
+// Batch flushed due to duration limit
+assert_matches!(batch.next(), Ok(Complete(mut complete)) => complete.commit());
+
+assert_matches!(batch.next(), Ok(Item(7)));
+assert_matches!(batch.next(), Ok(Item(8)));
+// Batch flushed by sending `Flush` command
+assert_matches!(batch.next(), Ok(Complete(mut complete)) => complete.commit());
+
+assert_matches!(batch.next(), Ok(Item(9)));
+assert_matches!(batch.next(), Ok(Item(10)));
+// Batch flushed by dropping sender (thread exit)
+assert_matches!(batch.next(), Ok(Complete(mut complete)) => complete.commit());
+```
+!*/
+
 use crate::buf_batch::{BufBatch, PollResult};
 use crate::channel::EndOfStreamError;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
