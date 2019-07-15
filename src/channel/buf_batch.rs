@@ -125,7 +125,7 @@ impl<I: Debug> BufBatchChannel<I> {
     {
         let (sender, batch) = BufBatchChannel::new(max_size, max_duration, channel_size);
 
-        std::thread::spawn(move || producer(sender));
+        std::thread::Builder::new().name("BufBatchChannel producer".to_string()).spawn(move || producer(sender)).expect("failed to start producer thread");
 
         batch
     }

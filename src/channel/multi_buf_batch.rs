@@ -159,7 +159,7 @@ where
     ) -> MultiBufBatchChannel<K, I> {
         let (sender, batch) = MultiBufBatchChannel::new(max_size, max_duration, channel_size);
 
-        std::thread::spawn(move || producer(sender));
+        std::thread::Builder::new().name("MultiBufBatchChannel producer".to_string()).spawn(move || producer(sender)).expect("failed to start producer thread");
 
         batch
     }

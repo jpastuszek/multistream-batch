@@ -181,7 +181,7 @@ impl<I: Debug> TxBufBatchChannel<I> {
     {
         let (sender, batch) = TxBufBatchChannel::new(max_size, max_duration, channel_size);
 
-        std::thread::spawn(move || producer(sender));
+        std::thread::Builder::new().name("TxBufBatchChannel producer".to_string()).spawn(move || producer(sender)).expect("failed to start producer thread");
 
         batch
     }
