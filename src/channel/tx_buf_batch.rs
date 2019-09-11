@@ -252,7 +252,10 @@ impl<I: Debug> TxBufBatchChannel<I> {
     }
 
     /// Restarts batch making `self.next()` to iterate already appended items starting from oldest one in current batch.
+    ///
+    /// Panics if batch is empty.
     pub fn retry(&mut self) {
+        assert!(self.as_slice().len() > 0, "TxBufBatchChannel retry of empty batch");
         self.retry = Some(self.as_slice().len());
     }
 
@@ -331,6 +334,23 @@ mod tests {
 
         sender.send(Command::Append(5)).unwrap();
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(5)));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_batch_empty() {
+        let mut batch =
+            TxBufBatchChannel::with_producer_thread(2, Duration::from_millis(100), 10, |sender| {
+                sender.send(Command::Append(1)).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+            });
+
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
+
+        batch.clear();
+        batch.retry();
+
+        assert_matches!(batch.next(), Err(EndOfStreamError));
     }
 
     #[test]
