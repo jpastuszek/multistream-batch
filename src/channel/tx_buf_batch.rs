@@ -246,6 +246,11 @@ impl<I: Debug> TxBufBatchChannel<I> {
         }
     }
 
+    /// Take last item from internal buffer - it won't be retried.
+    pub fn pop(&mut self) -> Option<I> {
+        self.batch.pop()
+    }
+
     /// Checks if previous `self.next()` call found channel to be disconnected.
     pub fn is_disconnected(&self) -> bool {
         self.disconnected

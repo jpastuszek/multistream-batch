@@ -99,6 +99,11 @@ impl<I: Debug> BufBatch<I> {
         self.items.drain(0..)
     }
 
+    /// Take last item from internal buffer.
+    pub fn pop(&mut self) -> Option<I> {
+        self.items.pop()
+    }
+
     /// Converts into internal item buffer.
     pub fn into_vec(self) -> Vec<I> {
         self.items
