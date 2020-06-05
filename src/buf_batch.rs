@@ -101,6 +101,9 @@ impl<I: Debug> BufBatch<I> {
 
     /// Take last item from internal buffer.
     pub fn pop(&mut self) -> Option<I> {
+        if self.items.len() == 1 {
+            self.first_item = None;
+        }
         self.items.pop()
     }
 
