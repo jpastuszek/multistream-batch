@@ -53,6 +53,7 @@ batch.retry();
 assert_matches!(batch.next(), Ok(Item(1)));
 assert_matches!(batch.next(), Ok(Item(2)));
 assert_matches!(batch.next(), Ok(Item(3)));
+assert_matches!(batch.next(), Ok(BufferedComplete(_)));
 assert_matches!(batch.next(), Ok(Item(4)));
 
 // Batch flushed due to size limit; call `.retry()` once more on the `Complete` result
@@ -63,6 +64,7 @@ assert_matches!(batch.next(), Ok(Item(1)));
 assert_matches!(batch.next(), Ok(Item(2)));
 assert_matches!(batch.next(), Ok(Item(3)));
 assert_matches!(batch.next(), Ok(Item(4)));
+assert_matches!(batch.next(), Ok(BufferedComplete(_)));
 // Batch flushed due to size limit; call `.commit()` on the `Complete` result to start new batch
 assert_matches!(batch.next(), Ok(Complete(mut complete)) => complete.commit());
 
