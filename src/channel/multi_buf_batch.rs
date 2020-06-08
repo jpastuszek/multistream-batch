@@ -267,6 +267,11 @@ where
     pub fn stats(&self) -> Stats {
         self.batch.stats()
     }
+
+    /// Splits into `MultiBufBatch` item buffer and channel `Receiver` end
+    pub fn split(self) -> (MultiBufBatch<K, I>, Receiver<Command<K, I>>) {
+        (self.batch, self.channel)
+    }
 }
 
 #[cfg(test)]

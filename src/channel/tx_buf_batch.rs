@@ -280,14 +280,45 @@ impl<I: Debug> TxBufBatchChannel<I> {
         self.batch.drain()
     }
 
+    /// Returns slice of internal item buffer.
+    pub fn as_slice(&self) -> &[I] {
+        self.batch.as_slice()
+    }
+
     /// Converts into internal item buffer.
     pub fn into_vec(self) -> Vec<I> {
         self.batch.into_vec()
     }
 
-    /// Returns slice of internal item buffer.
-    pub fn as_slice(&self) -> &[I] {
-        self.batch.as_slice()
+    /// Converts to an iterator that will drain all buffered items first and then all items from the channel.
+    pub fn drain_to_end(self) -> DrainToEnd<I> {
+        let (buffer, channel) = self.split();
+        DrainToEnd(buffer.into_vec().into_iter(), channel)
+    }
+
+    /// Splits into `BufBatch` item buffer and channel `Receiver` end
+    pub fn split(self) -> (BufBatch<I>, Receiver<Command<I>>) {
+        (self.batch, self.channel)
+    }
+}
+
+/// Iterator that will drain all buffered items first and then all items from the channel.
+#[derive(Debug)]
+pub struct DrainToEnd<I: Debug>(std::vec::IntoIter<I>, Receiver<Command<I>>);
+
+impl<I: Debug> Iterator for DrainToEnd<I> {
+    type Item = I;
+
+    fn next(&mut self) -> Option<I> {
+        self.0.next().or_else(|| {
+            loop {
+                match self.1.recv() {
+                    Ok(Command::Append(i)) => return Some(i),
+                    Ok(Command::Flush) => (),
+                    Err(_) => return None
+                }
+            }
+        })
     }
 }
 
@@ -478,5 +509,27 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(mut complete)) =>
             assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [2])
         ); // command
+    }
+
+    #[test]
+    fn test_drain_to_end() {
+        let (sender, mut batch) = TxBufBatchChannel::new(4, Duration::from_secs(10), 10);
+
+        sender.send(Command::Append(1)).unwrap();
+        sender.send(Command::Append(2)).unwrap();
+        sender.send(Command::Append(3)).unwrap();
+        sender.send(Command::Append(4)).unwrap();
+        sender.send(Command::Append(5)).unwrap();
+        drop(sender);
+
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(2)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
+
+        batch.retry();
+
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
+
+        assert_eq!(batch.drain_to_end().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4, 5]);
     }
 }
