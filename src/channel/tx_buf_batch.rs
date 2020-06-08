@@ -128,6 +128,8 @@ pub enum TxBufBatchChannelResult<'i, I: Debug> {
     Item(&'i I),
     /// Batch is now complete
     Complete(Complete<'i, I>),
+    /// Batch retry is now complete
+    BufferedComplete(Complete<'i, I>),
 }
 
 /// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
@@ -195,12 +197,14 @@ impl<I: Debug> TxBufBatchChannel<I> {
     pub fn next(&mut self) -> Result<TxBufBatchChannelResult<I>, EndOfStreamError> {
         // Yield internal messages if batch was retried
         if let Some(retry) = self.retry {
-            let item = &self.batch.as_slice()[self.batch.as_slice().len() - retry];
-            if retry == 1 {
+            if retry == 0 {
                 self.retry = None;
-            } else {
-                self.retry = Some(retry - 1);
+                return Ok(TxBufBatchChannelResult::BufferedComplete(Complete(self)));
             }
+
+            let item = &self.batch.as_slice()[self.batch.as_slice().len() - retry];
+
+            self.retry = Some(retry - 1);
             return Ok(TxBufBatchChannelResult::Item(item));
         }
 
@@ -320,6 +324,7 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(2)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(_))); // all items in buffer processed
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(mut complete)) => complete.retry()); // max_size
 
@@ -327,6 +332,7 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(2)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(_)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(_))); // max_size
 
         batch.retry();
@@ -335,6 +341,7 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(2)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(_)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(mut complete)) => complete.commit()); // max_size
 
         sender.send(Command::Append(5)).unwrap();
@@ -381,9 +388,10 @@ mod tests {
         batch.retry();
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(mut complete)) => complete.commit());
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(mut complete)) =>
-            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [3, 4])
+            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [4])
         ); // max_size
     }
 
@@ -411,9 +419,10 @@ mod tests {
         batch.retry();
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(mut complete)) => complete.commit());
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(mut complete)) =>
-            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [3, 4])
+            assert_eq!(complete.drain().collect::<Vec<_>>().as_slice(), [4])
         ); // max_size
     }
 
