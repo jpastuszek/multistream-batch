@@ -99,12 +99,22 @@ impl<I: Debug> BufBatch<I> {
         self.items.drain(0..)
     }
 
-    /// Take last item from internal buffer.
+    /// Pops last item from internal buffer.
     pub fn pop(&mut self) -> Option<I> {
         if self.items.len() == 1 {
             self.first_item = None;
         }
         self.items.pop()
+    }
+
+    /// Removes item from internal buffer at index.
+    ///
+    /// Panics if index is out of bounds.
+    pub fn remove(&mut self, index: usize) -> I {
+        if self.items.len() == 1 {
+            self.first_item = None;
+        }
+        self.items.remove(index)
     }
 
     /// Converts into internal item buffer.

@@ -252,8 +252,21 @@ impl<I: Debug> TxBufBatchChannel<I> {
         }
     }
 
-    /// Take last item from internal buffer - it won't be retried.
+    /// Pops last item returned by `next` from internal buffer - it won't be retried.
+    ///
+    /// Can be called multiple times to consume the internal buffer starting at last `next` item
+    /// position.
     pub fn pop(&mut self) -> Option<I> {
+        if let Some(retry) = self.retry {
+            // just after `retry()`; iteration not started yet
+            if retry == self.batch.as_slice().len() {
+                return None;
+            }
+
+            // remove from before retry pointer (retry + 1), retry will now point to the previous
+            // item correctly
+            return  Some(self.batch.remove(self.batch.as_slice().len() - (retry + 1)));
+        }
         self.batch.pop()
     }
 
@@ -531,5 +544,47 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
 
         assert_eq!(batch.drain_to_end().collect::<Vec<_>>().as_slice(), [1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_pop() {
+        let (sender, mut batch) = TxBufBatchChannel::new(40, Duration::from_secs(10), 10);
+
+        sender.send(Command::Append(1)).unwrap();
+        sender.send(Command::Append(2)).unwrap();
+        sender.send(Command::Append(3)).unwrap();
+        sender.send(Command::Append(4)).unwrap();
+        sender.send(Command::Append(5)).unwrap();
+        sender.send(Command::Append(6)).unwrap();
+        sender.send(Command::Append(7)).unwrap();
+        drop(sender);
+
+        assert_matches!(batch.pop(), None);
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(2)));
+        assert_matches!(batch.pop(), Some(2));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(5)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(6)));
+        assert_matches!(batch.pop(), Some(6));
+        assert_matches!(batch.pop(), Some(5));
+
+        batch.retry();
+        assert_matches!(batch.pop(), None);
+
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
+        assert_matches!(batch.pop(), Some(1));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
+
+        batch.retry();
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
+        assert_matches!(batch.pop(), Some(4));
+        assert_matches!(batch.pop(), Some(3));
+
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(_)));
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(7)));
     }
 }
