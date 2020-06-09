@@ -575,6 +575,7 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
         assert_matches!(batch.pop(), Some(1));
+        assert_matches!(batch.pop(), None);
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
 
