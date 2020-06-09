@@ -295,6 +295,11 @@ impl<I: Debug> TxBufBatchChannel<I> {
         self.batch.as_slice()
     }
 
+    /// Returns number of buffered items.
+    pub fn len(&self) -> usize {
+        self.batch.as_slice().len()
+    }
+
     /// Converts into internal item buffer.
     pub fn into_vec(self) -> Vec<I> {
         self.batch.into_vec()
