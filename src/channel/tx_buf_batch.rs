@@ -276,10 +276,7 @@ impl<I: Debug> TxBufBatchChannel<I> {
     }
 
     /// Restarts batch making `self.next()` to iterate already appended items starting from oldest one in current batch.
-    ///
-    /// Panics if batch is empty.
     pub fn retry(&mut self) {
-        assert!(self.as_slice().len() > 0, "TxBufBatchChannel retry of empty batch");
         self.retry = Some(self.as_slice().len());
     }
 
@@ -390,12 +387,15 @@ mod tests {
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(_)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(mut complete)) => complete.commit()); // max_size
 
+        // retry empty
+        batch.retry();
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(_)));
+
         sender.send(Command::Append(5)).unwrap();
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(5)));
     }
 
     #[test]
-    #[should_panic]
     fn test_batch_empty() {
         let mut batch =
             TxBufBatchChannel::with_producer_thread(2, Duration::from_millis(100), 10, |sender| {
@@ -408,6 +408,8 @@ mod tests {
         batch.clear();
         batch.retry();
 
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(_))); // empty retry done
+        assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Complete(_))); // timeout
         assert_matches!(batch.next(), Err(EndOfStreamError));
     }
 
