@@ -1,6 +1,6 @@
 [package]
 name = "multistream-batch"
-version = "1.0.1-alpha.0"
+version = "1.0.1"
 authors = ["Jakub Pastuszek <jpastuszek@protonmail.com>"]
 description = "Implementations of batching algorithms"
 repository = "https://sr.ht/~jpastuszek/multistream-batch"
