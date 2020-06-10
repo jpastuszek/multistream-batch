@@ -2,7 +2,7 @@
 name = "multistream-batch"
 version = "0.2.0"
 authors = ["Jakub Pastuszek <jpastuszek@protonmail.com>"]
-description = "Different types and implementations of batching algorithms."
+description = "Implementations of batching algorithms"
 repository = "https://sr.ht/~jpastuszek/multistream-batch"
 documentation = "https://docs.rs/multistream-batch"
 readme = "README.md"
