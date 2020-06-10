@@ -10,7 +10,7 @@ This implementations will construct batches based on:
 * calling one of the batch consuming methods,
 * sending flush command between batch items (channel based batches).
 
-See [documentation](https://dosc.rs/multistream-batch) of available algorithms.
+See [documentation](https://docs.rs/multistream-batch) of available algorithms.
 
 # Example
 
