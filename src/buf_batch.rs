@@ -1,22 +1,22 @@
-//! This module provides `BufBatch` that will buffer items until batch is ready and provide them in
+//! This module provides `BufBatch` that will buffer items until the batch is ready and provide them in
 //! one go using `Drain` iterator.
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use std::vec::Drain;
 
-/// Represents result from `poll` function call.
+/// Represents result from the `poll` function call.
 #[derive(Debug)]
 pub enum PollResult {
     /// Batch is ready after reaching one of the limits.
     Ready,
     /// Batch has not reached one of its limits yet.
-    /// Provides `Duration` after which `max_duration` limit will be reached if batch has
+    /// Provides `Duration` after which `max_duration` limit will be reached if the batch has
     /// at least one item.
     NotReady(Option<Duration>),
 }
 
 /// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
-/// since first item was appended to the batch.
+/// since the first item appended to the batch.
 ///
 /// This base implementation does not handle actual awaiting for batch duration timeout.
 #[derive(Debug)]
@@ -28,10 +28,10 @@ pub struct BufBatch<I: Debug> {
 }
 
 impl<I: Debug> BufBatch<I> {
-    /// Creates batch given maximum batch size in number of items (`max_size`)
-    /// and maximum duration that batch can last (`max_duration`) since first item appended to it.
+    /// Creates batch given maximum batch size in the number of items stored (`max_size`)
+    /// and maximum duration that batch can last (`max_duration`) since the first item appended to it.
     ///
-    /// Panics if `max_size` == 0.
+    /// Panics if `max_size == 0`.
     pub fn new(max_size: usize, max_duration: Duration) -> BufBatch<I> {
         assert!(max_size > 0, "BufBatch::new bad max_size");
 
@@ -43,11 +43,11 @@ impl<I: Debug> BufBatch<I> {
         }
     }
 
-    /// Checks if batch has reached one of its limits.
+    /// Checks if the batch has reached one of its limits.
     ///
     /// Returns:
-    /// * `PollResult::Ready` - batch has reached one of its limit and is ready to be consumed,
-    /// * `PollResult::NotReady(None)` - batch is not ready yet and has no items appeded yet,
+    /// * `PollResult::Ready` - batch has reached one of its limits and is ready to be consumed,
+    /// * `PollResult::NotReady(None)` - batch is not ready yet and has no items appended yet,
     /// * `PollResult::NotReady(Some(duration))` - batch is not ready yet but it will be ready after time duration due to duration limit.
     pub fn poll(&self) -> PollResult {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
@@ -68,11 +68,11 @@ impl<I: Debug> BufBatch<I> {
         PollResult::NotReady(None)
     }
 
-    /// Appends item to batch and returns reference to that item.
+    /// Appends item to batch and returns a reference to that item.
     ///
-    /// It is an contract error to append batch that is ready according to `self.poll()`.
+    /// It is a contract error to append batch that is ready according to `self.poll()`.
     ///
-    /// Panics if batch has already reached its `max_size` limit.
+    /// Panics if the batch has already reached its `max_size` limit.
     pub fn append(&mut self, item: I) -> &I {
         debug_assert!(self.items.is_empty() ^ self.first_item.is_some());
         assert!(
@@ -87,13 +87,13 @@ impl<I: Debug> BufBatch<I> {
         self.items.last().unwrap()
     }
 
-    /// Starts new batch dropping all buffered items.
+    /// Starts a new batch by dropping all buffered items.
     pub fn clear(&mut self) {
         self.first_item = None;
         self.items.clear();
     }
 
-    /// Starts new batch by draining all buffered items.
+    /// Starts a new batch by draining all buffered items.
     pub fn drain(&mut self) -> Drain<I> {
         self.first_item = None;
         self.items.drain(0..)

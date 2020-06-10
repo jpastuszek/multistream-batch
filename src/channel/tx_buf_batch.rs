@@ -13,7 +13,7 @@ use std::time::Duration;
 use assert_matches::assert_matches;
 
 // Create producer thread and batcher with maximum size of 4 items and
-// maximum batch duration since first received item of 200 ms.
+// maximum batch duration since the first received item of 200 ms.
 let mut batch = TxBufBatchChannel::with_producer_thread(4, Duration::from_millis(200), 10, |sender| {
     // Send a sequence of `Append` commands with integer item value
     sender.send(Append(1)).unwrap();
@@ -93,7 +93,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::vec::Drain;
 
-/// Commands that can be send to `TxBufBatchChannel` via `Sender` endpoint.
+/// Commands that can be sent to `TxBufBatchChannel` via `Sender` endpoint.
 #[derive(Debug)]
 pub enum Command<I: Debug> {
     /// Append item `I` to batch.
@@ -107,17 +107,17 @@ pub enum Command<I: Debug> {
 pub struct Complete<'i, I: Debug>(&'i mut TxBufBatchChannel<I>);
 
 impl<'i, I: Debug> Complete<'i, I> {
-    /// Restarts batch making `TxBufBatchChannel.next()` to iterate already received items starting from oldest one in current batch.
+    /// Restarts the batch. `TxBufBatchChannel.next()` will iterate already received items starting from oldest one in the current batch.
     pub fn retry(&mut self) {
         self.0.retry()
     }
 
-    /// Commits current batch by dropping all buffered items.
+    /// Commits the current batch by dropping all buffered items.
     pub fn commit(&mut self) {
         self.0.clear()
     }
 
-    /// Commits current batch by draining all buffered items.
+    /// Commits the current batch by draining all buffered items.
     pub fn drain(&mut self) -> Drain<I> {
         self.0.drain()
     }
@@ -135,11 +135,10 @@ pub enum TxBufBatchChannelResult<'i, I: Debug> {
 }
 
 /// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
-/// since first item was appended to the batch. Reference to each item is returned for every
+/// since the first item appended to the batch. Reference to each item is returned for every
 /// received item as soon as they are received.
 ///
-/// This batch can provide all the buffered item references in order as they were received again
-/// after batch was completed but retried (not committed).
+/// The current batch can be retried. Iteration will yield not committed items again.
 #[derive(Debug)]
 pub struct TxBufBatchChannel<I: Debug> {
     channel: Receiver<Command<I>>,
@@ -151,10 +150,13 @@ pub struct TxBufBatchChannel<I: Debug> {
 }
 
 impl<I: Debug> TxBufBatchChannel<I> {
-    /// Creates batch given maximum batch size in number of items (`max_size`)
-    /// and maximum duration that batch can last (`max_duration`) since first item appended to it.
+    /// Creates batch given maximum batch size in the number of items stored (`max_size`)
+    /// and maximum duration that batch can last (`max_duration`) since the first item appended to it.
+    /// Parameter `channel_size` defines the maximum number of messages that can be buffered between sender and receiver.
     ///
-    /// Panics if `max_size` == 0.
+    /// This method also returns `Sender` endpoint that can be used to send `Command`s.
+    ///
+    /// Panics if `max_size == 0`.
     pub fn new(
         max_size: usize,
         max_duration: Duration,
@@ -173,7 +175,8 @@ impl<I: Debug> TxBufBatchChannel<I> {
         )
     }
 
-    /// Crates batch calling `producer` closure with `Sender` end of the channel in newly started thread.
+    /// Calls `producer` closure with `Sender` end of the channel in a newly started thread and
+    /// returns `TxBufBatchChannel` connected to that `Sender`.
     pub fn with_producer_thread(
         max_size: usize,
         max_duration: Duration,
@@ -195,7 +198,8 @@ impl<I: Debug> TxBufBatchChannel<I> {
     ///
     /// This call will block until batch becomes ready.
     ///
-    /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all batched items were flushed.
+    /// When the `Sender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
+    /// outstanding items were flushed.
     pub fn next(&mut self) -> Result<TxBufBatchChannelResult<I>, EndOfStreamError> {
         // Yield internal messages if batch was retried
         if let Some(retry) = self.retry {
@@ -311,7 +315,7 @@ impl<I: Debug> TxBufBatchChannel<I> {
         DrainToEnd(buffer.into_vec().into_iter(), channel)
     }
 
-    /// Splits into `BufBatch` item buffer and channel `Receiver` end
+    /// Splits into `BufBatch` item buffer and channel `Receiver` end.
     pub fn split(self) -> (BufBatch<I>, Receiver<Command<I>>) {
         (self.batch, self.channel)
     }

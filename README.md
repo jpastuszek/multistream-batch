@@ -1,14 +1,15 @@
 [![Latest Version]][crates.io] [![Documentation]][docs.rs] ![License]
 
-Rust library that provides different types and implementations of batching algorithms.
+Rust library of batching algorithm implementations.
 
-Batching is based on collecting items and flushing them all together when batch has reached some limit or when manually flushed. This makes all items collected in single batch available at once for further processing (e.g. batch insert into a database).
+Batching works by accumulating items and later automatically flushing them all together when the batch has reached a limit.
+All items collected in the single batch are available at once for further processing (e.g. batch insert into a database).
 
-This implementations will construct batches based on:
-* maximum number of items collected,
-* maximum time duration since first item was collected by the batch,
+These implementations will construct batches based on:
+* limit of the number of items collected in a batch,
+* limit of time duration since the first item appended to the batch,
 * calling one of the batch consuming methods,
-* sending flush command between batch items (channel based batches).
+* sending flush command between batch items (channel-based implementations).
 
 See [documentation](https://docs.rs/multistream-batch) of available algorithms.
 
@@ -22,8 +23,8 @@ use multistream_batch::channel::multi_buf_batch::Command::*;
 use std::time::Duration;
 use assert_matches::assert_matches;
 
-// Create producer thread and batcher with maximum size of 4 items (for each stream) and
-// maximum batch duration since first received item of 200 ms.
+// Create producer thread with a channel-based, multi-stream batching implementation configured with a maximum size
+// of 4 items (for each stream) and a maximum batch duration since the first received item of 200 ms.
 let mut batch = MultiBufBatchChannel::with_producer_thread(4, Duration::from_millis(200), 10, |sender| {
 	// Send a sequence of `Append` commands with integer stream key and item value
 	sender.send(Append(1, 1)).unwrap();

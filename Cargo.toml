@@ -1,9 +1,9 @@
 [package]
 name = "multistream-batch"
-version = "0.1.3-alpha.0"
+version = "1.0.1-alpha.0"
 authors = ["Jakub Pastuszek <jpastuszek@protonmail.com>"]
-description = "Different types and implementations of batching algorithms."
-repository = "https://github.com/jpastuszek/multistream-batch"
+description = "Implementations of batching algorithms"
+repository = "https://sr.ht/~jpastuszek/multistream-batch"
 documentation = "https://docs.rs/multistream-batch"
 readme = "README.md"
 keywords = ["batch", "multiline", "transaction"]
