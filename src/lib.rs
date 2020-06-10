@@ -1,13 +1,14 @@
 /*!
-This Rust library provides different types and implementations of batching algorithms.
+Implementations of batching algorithms.
 
-Batching is based on collecting items and flushing them all together when batch has reached some limit or when manually flushed. This makes all items collected in single batch available at once for further processing (e.g. batch insert into a database).
+Batching works by accumulating items and later automatically flushing them all together when the batch has reached a limit.
+All items collected in the single batch are available at once for further processing (e.g. batch insert into a database).
 
-This implementations will construct batches based on:
-* maximum number of items collected,
-* maximum time duration since first item was collected by the batch,
+These implementations will construct batches based on:
+* limit of the number of items collected in a batch,
+* limit of time duration since the first item appended to the batch,
 * calling one of the batch consuming methods,
-* sending flush command between batch items (channel based batches).
+* sending flush command between batch items (channel-based implementations).
 
 See sub modules for documentation of available algorithms.
 !*/

@@ -1,6 +1,6 @@
 /*!
 This module provides `MultiBufBatchChannel` that will buffer items into multiple internal batches based on batch stream key until
-one of the batches is ready and provides this items in one go along with the batch stream key using `Drain` iterator.
+one of the batches is ready and provide them in one go, along with the batch stream key, using `Drain` iterator.
 
 # Example
 
@@ -12,8 +12,8 @@ use multistream_batch::channel::multi_buf_batch::Command::*;
 use std::time::Duration;
 use assert_matches::assert_matches;
 
-// Create producer thread and batcher with maximum size of 4 items (for each stream) and
-// maximum batch duration since first received item of 200 ms.
+// Create producer thread with `MultiBufBatchChannel` configured with a maximum size of 4 items and
+// a maximum batch duration since the first received item of 200 ms.
 let mut batch = MultiBufBatchChannel::with_producer_thread(4, Duration::from_millis(200), 10, |sender| {
     // Send a sequence of `Append` commands with integer stream key and item value
     sender.send(Append(1, 1)).unwrap();
@@ -101,7 +101,7 @@ use std::hash::Hash;
 use std::time::Duration;
 use std::vec::Drain;
 
-/// Commands that can be send to `MultiBufBatchChannel` via `Sender` endpoint.
+/// Commands that can be sent to `MultiBufBatchChannel` via `Sender` endpoint.
 #[derive(Debug)]
 pub enum Command<K: Debug + Ord + Hash, I: Debug> {
     /// Append item `I` to batch with stream key `K`.
@@ -110,9 +110,9 @@ pub enum Command<K: Debug + Ord + Hash, I: Debug> {
     Flush(K),
 }
 
-/// Collects items into multiple batches based on stream key.
+/// Collects items into multiple batches based on the stream key.
 /// A batch may become ready after collecting `max_size` number of items or until `max_duration` has elapsed
-/// since first item was appended to the batch.
+/// since the first item appended to the batch.
 ///
 /// Batch item buffers are cached and reused to avoid allocations.
 #[derive(Debug)]
@@ -129,10 +129,12 @@ where
     I: Debug + Send + 'static,
 {
     /// Crates new instance with given maximum batch size (`max_size`) and maximum duration (`max_duration`) that
-    /// batch can last since first item appended to it.
-    /// It also returns `Sender` endpoint into which `Command`s can be sent.
+    /// batch can last since the first item appended to it.
+    /// Parameter `channel_size` defines the maximum number of messages that can be buffered between sender and receiver.
     ///
-    /// Panics if `max_size` == 0.
+    /// This method also returns `Sender` endpoint that can be used to send `Command`s.
+    ///
+    /// Panics if `max_size == 0`.
     pub fn new(
         max_size: usize,
         max_duration: Duration,
@@ -150,7 +152,8 @@ where
         )
     }
 
-    /// Crates batch calling `producer` closure with `Sender` end of the channel in newly started thread.
+    /// Calls `producer` closure with `Sender` end of the channel in a newly started thread and
+    /// returns `MultiBufBatchChannel` connected to that `Sender`.
     pub fn with_producer_thread(
         max_size: usize,
         max_duration: Duration,
@@ -171,7 +174,8 @@ where
     ///
     /// This call will block until one of the batches becomes ready.
     ///
-    /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all outstanding batches were flushed.
+    /// When the `Sender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
+    /// outstanding items were flushed.
     pub fn next<'i>(&'i mut self) -> Result<(K, Drain<I>), EndOfStreamError> {
         loop {
             if self.flush.is_some() {
@@ -268,7 +272,7 @@ where
         self.batch.stats()
     }
 
-    /// Splits into `MultiBufBatch` item buffer and channel `Receiver` end
+    /// Splits into `MultiBufBatch` item buffer and channel `Receiver` end.
     pub fn split(self) -> (MultiBufBatch<K, I>, Receiver<Command<K, I>>) {
         (self.batch, self.channel)
     }

@@ -1,12 +1,12 @@
 //! This module provides `MultiBufBatch` that will buffer items into multiple internal batches based on batch stream key until
-//! one of the batches is ready and provides this items in one go along with the batch stream key using `Drain` iterator.
+//! one of the batches is ready. Then it provides accumulated items in one go along with the batch stream key using `Drain` iterator.
 use linked_hash_map::LinkedHashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 use std::vec::Drain;
 
-/// Represents outstanding batch with items buffer from cache and `Instant` at which it was crated.
+/// An outstanding batch of items returned from the cache and a time `Instant` at which it was created.
 #[derive(Debug)]
 struct OutstandingBatch<I: Debug> {
     items: Vec<I>,
@@ -79,7 +79,7 @@ where
     /// Crates new instance with given maximum batch size (`max_size`) and maximum duration (`max_duration`) that
     /// batch can last since first item appended to it.
     ///
-    /// Panics if `max_size` == 0.
+    /// Panics if `max_size == 0`.
     pub fn new(max_size: usize, max_duration: Duration) -> MultiBufBatch<K, I> {
         assert!(max_size > 0, "MultiBufBatch::new bad max_size");
 

@@ -1,10 +1,10 @@
 /*!
-This module provides `BufBatchChannel` that will buffer items until batch is ready and provides them in
+This module provides `BufBatchChannel` that will buffer items until the batch is ready and provide them in
 one go using `Drain` iterator.
 
 # Example
 
-Collect batches of items by reaching different limits and using `Flush` command.
+Collect batches of items after reaching different limits and use of `Flush` command.
 
 ```rust
 use multistream_batch::channel::buf_batch::BufBatchChannel;
@@ -12,8 +12,8 @@ use multistream_batch::channel::buf_batch::Command::*;
 use std::time::Duration;
 use assert_matches::assert_matches;
 
-// Create producer thread and batcher with maximum size of 4 items and
-// maximum batch duration since first received item of 200 ms.
+// Create producer thread with `BufBatchChannel` configured with a maximum size of 4 items and
+// a maximum batch duration since the first received item of 200 ms.
 let mut batch = BufBatchChannel::with_producer_thread(4, Duration::from_millis(200), 10, |sender| {
     // Send a sequence of `Append` commands with integer item value
     sender.send(Append(1)).unwrap();
@@ -71,7 +71,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::vec::Drain;
 
-/// Commands that can be send to `BufBatchChannel` via `Sender` endpoint.
+/// Commands that can be sent to `BufBatchChannel` via `Sender` endpoint.
 #[derive(Debug)]
 pub enum Command<I: Debug> {
     /// Append item `I` to batch.
@@ -81,7 +81,7 @@ pub enum Command<I: Debug> {
 }
 
 /// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
-/// since first item was appended to the batch.
+/// since the first item appended to the batch.
 #[derive(Debug)]
 pub struct BufBatchChannel<I: Debug> {
     channel: Receiver<Command<I>>,
@@ -91,11 +91,13 @@ pub struct BufBatchChannel<I: Debug> {
 }
 
 impl<I: Debug> BufBatchChannel<I> {
-    /// Creates batch given maximum batch size in number of items (`max_size`)
-    /// and maximum duration that batch can last (`max_duration`) since first item appended to it.
-    /// It also returns `Sender` endpoint into which `Command`s can be sent.
+    /// Creates batch given maximum batch size in the number of items stored (`max_size`)
+    /// and maximum duration that batch can last (`max_duration`) since the first item appended to it.
+    /// Parameter `channel_size` defines the maximum number of messages that can be buffered between sender and receiver.
     ///
-    /// Panics if `max_size` == 0.
+    /// This method also returns `Sender` endpoint that can be used to send `Command`s.
+    ///
+    /// Panics if `max_size == 0`.
     pub fn new(
         max_size: usize,
         max_duration: Duration,
@@ -113,7 +115,8 @@ impl<I: Debug> BufBatchChannel<I> {
         )
     }
 
-    /// Crates batch calling `producer` closure with `Sender` end of the channel in newly started thread.
+    /// Calls `producer` closure with `Sender` end of the channel in a newly started thread and
+    /// returns `BufBatchChannel` connected to that `Sender`.
     pub fn with_producer_thread(
         max_size: usize,
         max_duration: Duration,
@@ -134,7 +137,8 @@ impl<I: Debug> BufBatchChannel<I> {
     ///
     /// This call will block until batch becomes ready.
     ///
-    /// Returns `Err(EndOfStreamError)` after `Sender` end was dropped and all batched items were flushed.
+    /// When the `Sender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
+    /// outstanding items were flushed.
     pub fn next(&mut self) -> Result<Drain<I>, EndOfStreamError> {
         if self.disconnected {
             return Err(EndOfStreamError);
@@ -178,7 +182,7 @@ impl<I: Debug> BufBatchChannel<I> {
         }
     }
 
-    /// Checks if previous `self.next()` call found channel to be disconnected.
+    /// Checks if previous `self.next()` call found the channel to be disconnected.
     pub fn is_disconnected(&self) -> bool {
         self.disconnected
     }
@@ -209,7 +213,7 @@ impl<I: Debug> BufBatchChannel<I> {
         DrainToEnd(buffer.into_vec().into_iter(), channel)
     }
 
-    /// Splits into `BufBatch` item buffer and channel `Receiver` end
+    /// Splits into `BufBatch` item buffer and channel `Receiver` end.
     pub fn split(self) -> (BufBatch<I>, Receiver<Command<I>>) {
         (self.batch, self.channel)
     }
