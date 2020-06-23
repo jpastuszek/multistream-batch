@@ -304,6 +304,15 @@ impl<I: Debug> TxBufBatchChannel<I> {
         self.batch.as_slice().len()
     }
 
+    /// Returns number of buffered items that were already visited by the `next` call in current batch.
+    pub fn batch_len(&self) -> usize {
+        if let Some(retry) = self.retry {
+            self.batch.as_slice().len() - retry
+        } else {
+            self.len()
+        }
+    }
+
     /// Converts into internal item buffer.
     pub fn into_vec(self) -> Vec<I> {
         self.batch.into_vec()
@@ -570,25 +579,36 @@ mod tests {
         sender.send(Command::Append(7)).unwrap();
         drop(sender);
 
+        assert_eq!(batch.batch_len(), 0);
+
         assert_matches!(batch.pop(), None);
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(2)));
+        assert_eq!(batch.batch_len(), 2);
         assert_matches!(batch.pop(), Some(2));
+        assert_eq!(batch.batch_len(), 1);
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(5)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(6)));
+        assert_eq!(batch.batch_len(), 5);
         assert_matches!(batch.pop(), Some(6));
         assert_matches!(batch.pop(), Some(5));
+        assert_eq!(batch.batch_len(), 3);
 
         batch.retry();
+        assert_eq!(batch.batch_len(), 0);
         assert_matches!(batch.pop(), None);
+        assert_eq!(batch.batch_len(), 0);
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(1)));
+        assert_eq!(batch.batch_len(), 1);
         assert_matches!(batch.pop(), Some(1));
+        assert_eq!(batch.batch_len(), 0);
         assert_matches!(batch.pop(), None);
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(4)));
+        assert_eq!(batch.batch_len(), 2);
 
         batch.retry();
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(3)));
@@ -598,5 +618,6 @@ mod tests {
 
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::BufferedComplete(_)));
         assert_matches!(batch.next(), Ok(TxBufBatchChannelResult::Item(7)));
+        assert_eq!(batch.batch_len(), 1);
     }
 }
