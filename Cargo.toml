@@ -16,7 +16,7 @@ default = ["crossbeam-channel"]
 
 [dependencies]
 crossbeam-channel = { version = "0.3.8", optional = true }
-linked-hash-map = "0.5.2"
+linked-hash-map = "0.5.4"
 
 [dev-dependencies]
 assert_matches = "1.3.0"
