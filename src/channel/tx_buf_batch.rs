@@ -93,7 +93,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::vec::Drain;
 
-/// Commands that can be sent to `TxBufBatchChannel` via `Sender` endpoint.
+/// Commands that can be sent to `TxBufBatchChannel` via `CommandSender` endpoint.
 #[derive(Debug)]
 pub enum Command<I: Debug> {
     /// Append item `I` to batch.
@@ -101,6 +101,8 @@ pub enum Command<I: Debug> {
     /// Flush outstanding items.
     Flush,
 }
+
+pub type CommandSender<I> = Sender<Command<I>>;
 
 /// Provides actions that can be taken to consume complete batch.
 #[derive(Debug)]
@@ -154,14 +156,14 @@ impl<I: Debug> TxBufBatchChannel<I> {
     /// and maximum duration that batch can last (`max_duration`) since the first item appended to it.
     /// Parameter `channel_size` defines the maximum number of messages that can be buffered between sender and receiver.
     ///
-    /// This method also returns `Sender` endpoint that can be used to send `Command`s.
+    /// This method also returns `CommandSender` endpoint that can be used to send `Command`s.
     ///
     /// Panics if `max_size == 0`.
     pub fn new(
         max_size: usize,
         max_duration: Duration,
         channel_size: usize,
-    ) -> (Sender<Command<I>>, TxBufBatchChannel<I>) {
+    ) -> (CommandSender<I>, TxBufBatchChannel<I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
         (
@@ -175,13 +177,13 @@ impl<I: Debug> TxBufBatchChannel<I> {
         )
     }
 
-    /// Calls `producer` closure with `Sender` end of the channel in a newly started thread and
-    /// returns `TxBufBatchChannel` connected to that `Sender`.
+    /// Calls `producer` closure with `CommandSender` end of the channel in a newly started thread and
+    /// returns `TxBufBatchChannel` connected to that `CommandSender`.
     pub fn with_producer_thread(
         max_size: usize,
         max_duration: Duration,
         channel_size: usize,
-        producer: impl FnOnce(Sender<Command<I>>) -> () + Send + 'static,
+        producer: impl FnOnce(CommandSender<I>) -> () + Send + 'static,
     ) -> TxBufBatchChannel<I>
     where
         I: Send + 'static,
@@ -198,7 +200,7 @@ impl<I: Debug> TxBufBatchChannel<I> {
     ///
     /// This call will block until batch becomes ready.
     ///
-    /// When the `Sender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
+    /// When the `CommandSender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
     /// outstanding items were flushed.
     pub fn next(&mut self) -> Result<TxBufBatchChannelResult<I>, EndOfStreamError> {
         // Yield internal messages if batch was retried

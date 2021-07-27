@@ -101,7 +101,7 @@ use std::hash::Hash;
 use std::time::Duration;
 use std::vec::Drain;
 
-/// Commands that can be sent to `MultiBufBatchChannel` via `Sender` endpoint.
+/// Commands that can be sent to `MultiBufBatchChannel` via `CommandSender` endpoint.
 #[derive(Debug)]
 pub enum Command<K: Debug + Ord + Hash, I: Debug> {
     /// Append item `I` to batch with stream key `K`.
@@ -109,6 +109,8 @@ pub enum Command<K: Debug + Ord + Hash, I: Debug> {
     /// Flush outstanding items from batch with stream key `K`.
     Flush(K),
 }
+
+pub type CommandSender<K, I> = Sender<Command<K, I>>;
 
 /// Collects items into multiple batches based on the stream key.
 /// A batch may become ready after collecting `max_size` number of items or until `max_duration` has elapsed
@@ -132,14 +134,14 @@ where
     /// batch can last since the first item appended to it.
     /// Parameter `channel_size` defines the maximum number of messages that can be buffered between sender and receiver.
     ///
-    /// This method also returns `Sender` endpoint that can be used to send `Command`s.
+    /// This method also returns `CommandSender` endpoint that can be used to send `Command`s.
     ///
     /// Panics if `max_size == 0`.
     pub fn new(
         max_size: usize,
         max_duration: Duration,
         channel_size: usize,
-    ) -> (Sender<Command<K, I>>, MultiBufBatchChannel<K, I>) {
+    ) -> (CommandSender<K, I>, MultiBufBatchChannel<K, I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
         (
@@ -152,13 +154,13 @@ where
         )
     }
 
-    /// Calls `producer` closure with `Sender` end of the channel in a newly started thread and
-    /// returns `MultiBufBatchChannel` connected to that `Sender`.
+    /// Calls `producer` closure with `CommandSender` end of the channel in a newly started thread and
+    /// returns `MultiBufBatchChannel` connected to that `CommandSender`.
     pub fn with_producer_thread(
         max_size: usize,
         max_duration: Duration,
         channel_size: usize,
-        producer: impl FnOnce(Sender<Command<K, I>>) -> () + Send + 'static,
+        producer: impl FnOnce(CommandSender<K, I>) -> () + Send + 'static,
     ) -> MultiBufBatchChannel<K, I> {
         let (sender, batch) = MultiBufBatchChannel::new(max_size, max_duration, channel_size);
 
@@ -174,7 +176,7 @@ where
     ///
     /// This call will block until one of the batches becomes ready.
     ///
-    /// When the `Sender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
+    /// When the `CommandSender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
     /// outstanding items were flushed.
     pub fn next<'i>(&'i mut self) -> Result<(K, Drain<I>), EndOfStreamError> {
         loop {

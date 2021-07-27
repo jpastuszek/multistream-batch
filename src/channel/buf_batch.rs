@@ -80,6 +80,8 @@ pub enum Command<I: Debug> {
     Flush,
 }
 
+pub type CommandSender<I> = Sender<Command<I>>;
+
 /// Batches items in internal buffer up to `max_size` items or until `max_duration` has elapsed
 /// since the first item appended to the batch.
 #[derive(Debug)]
@@ -95,14 +97,14 @@ impl<I: Debug> BufBatchChannel<I> {
     /// and maximum duration that batch can last (`max_duration`) since the first item appended to it.
     /// Parameter `channel_size` defines the maximum number of messages that can be buffered between sender and receiver.
     ///
-    /// This method also returns `Sender` endpoint that can be used to send `Command`s.
+    /// This method also returns `CommandSender` endpoint that can be used to send `Command`s.
     ///
     /// Panics if `max_size == 0`.
     pub fn new(
         max_size: usize,
         max_duration: Duration,
         channel_size: usize,
-    ) -> (Sender<Command<I>>, BufBatchChannel<I>) {
+    ) -> (CommandSender<I>, BufBatchChannel<I>) {
         let (sender, receiver) = crossbeam_channel::bounded(channel_size);
 
         (
@@ -115,13 +117,13 @@ impl<I: Debug> BufBatchChannel<I> {
         )
     }
 
-    /// Calls `producer` closure with `Sender` end of the channel in a newly started thread and
-    /// returns `BufBatchChannel` connected to that `Sender`.
+    /// Calls `producer` closure with `CommandSender` end of the channel in a newly started thread and
+    /// returns `BufBatchChannel` connected to that `CommandSender`.
     pub fn with_producer_thread(
         max_size: usize,
         max_duration: Duration,
         channel_size: usize,
-        producer: impl FnOnce(Sender<Command<I>>) -> () + Send + 'static,
+        producer: impl FnOnce(CommandSender<I>) -> () + Send + 'static,
     ) -> BufBatchChannel<I>
     where
         I: Send + 'static,
@@ -137,7 +139,7 @@ impl<I: Debug> BufBatchChannel<I> {
     ///
     /// This call will block until batch becomes ready.
     ///
-    /// When the `Sender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
+    /// When the `CommandSender` end has dropped, this method returns with `Err(EndOfStreamError)` after all
     /// outstanding items were flushed.
     pub fn next(&mut self) -> Result<Drain<I>, EndOfStreamError> {
         if self.disconnected {
